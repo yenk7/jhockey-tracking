@@ -10,14 +10,9 @@
 
 ## Overview
 
-For the hockey robots you are constructing for your final project, it is essential to know the robot's exact location at any given time. This information is necessary to determine the correct orientation and movements for approaching and shooting towards the goal. To simplify your project, we have constructed the tracking system for you. 
+For the hockey robots you are constructing for your final project, it is essential to know the robot's exact location at any given time to determine the correct orientation and movements for approaching and shooting towards the goal. To simplify your project, we have constructed the tracking system for you.
 
-This system tracks ArUco tags on top of each robot using a computer vision algorithm and sends each robot its coordinates using the ZigBee protocol. It comprises of a couple components:
-
-- ArUco Tags
-- XBee 3 Module (https://www.sparkfun.com/products/15126) 
-- Bidirectional Level Converter (https://www.sparkfun.com/products/12009)
-- Connector Module PCB
+This system tracks ArUco tags on top of each robot using a computer vision algorithm and sends each robot its coordinates using a ZigBee protocol.
 
 ## Robot Tracking - ArUco Tags, Computer Vision
 
@@ -40,7 +35,7 @@ You can check out this resource for a more detailed overview of ZigBee: https://
 
 ### Basic Network Architecture
 
-ZigBee modules (called XBees) can mesh together to form a robust network where each node can transmit and relay data to other nodes. This meshing capability allows for extended range and redundancy, as data can find multiple paths to reach its destination. The dynamic nature of ZigBee mesh networks ensures that if one node fails, data can be rerouted through other nodes, enhancing network reliability.
+ZigBee modules (called XBees) can mesh together to form a  network where each node can transmit and relay data to other nodes. This meshing capability allows for extended range and redundancy, as data can find multiple paths to reach its destination. The dynamic nature of ZigBee mesh networks ensures that if one node fails, data can be rerouted through other nodes, enhancing network reliability.
 
 ![](src/Mesh.png)
 
@@ -50,7 +45,7 @@ ZigBee modules (called XBees) can mesh together to form a robust network where e
 
 #### Sending the Match Information
 
-In our setup, the CV algorithm supplies the robot tracking information to the Raspberry Pi, which then broadcasts the match information as a string to all receiver nodes on the same Personal Area Network (PAN) channel.
+In our setup, the CV algorithm supplies the robot tracking information to the Raspberry Pi, which then broadcasts the match information via a XBee 3 Tx module to all receiver nodes on the same Personal Area Network (PAN) channel.
 
 The locations of all the robots on the arena are sent within the same packet. The match information consists of the following information:
 
@@ -65,11 +60,13 @@ The locations of all the robots on the arena are sent within the same packet. Th
 
 .. and so on.
 
-This information is sent to all the XBee modules as a string, as shown in the figure above. 
+This information is sent to all the XBee 3 modules as a string, as shown in the figure above. 
+
+> XBee 3 Module Datasheet: https://www.digi.com/resources/documentation/digidocs/pdfs/90001543.pdf
 
 #### Receiving and Processing the Match Information
 
-The XBee modules have an inbuilt processor on them, capable of running Micropython scripts. We have built a script which processes the match information, and only returns selected information back to your Arduino-based robot. The script has a predefined `Robot ID`, and parses the string for information pertaining to that particular ID. 
+The XBee modules have an inbuilt processor on them, capable of running Micropython scripts. We have flashed a script which processes the match information, and only returns selected information back to your Arduino-based robot. The script has a predefined `Robot ID`, and parses the string for information pertaining to that particular ID. 
 
 The output from the module after parsing the string is a comma-delimited string, which looks like  `M,TTTT,X,Y`.
 
@@ -80,13 +77,19 @@ The output from the module after parsing the string is a comma-delimited string,
 
 The Arduino and XBee module communicate via a UART protocol. On an Arduino Mega, four hardware serial lines are available for UART communication. One of these is used to establish communication with our computer, and a second one is utilized for XBee communication.
 
-Fundamentally, XBee modules operate with 3.3V digital logic, while the Arduino Mega operates at 5V digital logic. Therefore, it is necessary to convert the logic voltage levels between these devices to ensure proper transmission. For this task, we use a bidirectional level converter, as illustrated in the figure below.
+XBee modules operate with 3.3V digital logic, while the Arduino Mega operates at 5V digital logic. Therefore, it is necessary to convert the logic voltage levels between these devices to ensure proper transmission. For this task, we use a bidirectional level converter, as illustrated in the figure below.
 
 ![](src/LevelConverter.png)
 
+> Bidirectional Level Converter Link: https://www.sparkfun.com/products/12009
+> 
+> Bidirectional Level Converter Datasheet: https://cdn.sparkfun.com/datasheets/BreakoutBoards/BSS138.pdf
+
 The circuitry for this has been condensed into a printed circuit board (PCB) for your convenience, on which you will only need to mount the respective components. Below, you will find a sample connection diagram that corresponds to the provided sample code. If necessary, you can change the hardware serial ports.
 
-The `DOUT` and `DIN` labels on the PCB corresponds to the respective pins on the XBee module. You can learn more about them in the [XBee 3 datasheet](https://www.digi.com/resources/documentation/digidocs/pdfs/90001543.pdf). 
+> *PCB files available at https://github.com/anwaypimpalkar/jhockey-tracking/tree/main/pcb*
+
+The `DOUT` and `DIN` labels on the PCB corresponds to the respective pins on the XBee module. You can learn more about them in the XBee 3 Datasheet. 
 
 ![](src/Connections.png)
 
@@ -94,4 +97,4 @@ The `DOUT` and `DIN` labels on the PCB corresponds to the respective pins on the
 
 The XBee module communicates with the Arduino via UART. To send a location query, you must transmit a `?` character to the XBee module, which will then respond with the latest coordinate information in the comma-delimited format previously mentioned.
 
-> *Sample code https://github.com/anwaypimpalkar/jhockey-tracking/tree/main/xbee_sample_code*
+> *Sample code available at https://github.com/anwaypimpalkar/jhockey-tracking/tree/main/xbee_sample_code*
