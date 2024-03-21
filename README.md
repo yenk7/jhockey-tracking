@@ -49,16 +49,18 @@ In our setup, the CV algorithm supplies the robot tracking information to the Ra
 
 The locations of all the robots on the arena are sent within the same packet. The match information consists of the following information:
 
-- `Match Byte:` Binary (0/1) indicating whether a match is ongoing.
-- `Time:` Match time in seconds, represented as 4-bytes.
-- `Robot #1 ID:` Alphabet corresponding to the first robot's ArUco tag.
-- `Robot #1 X Coord:` First robot's X coordinate in centimeters.
-- `Robot #1 Y Coord:` First robot's Y coordinate in centimeters.
-- `Robot #2 ID:` Alphabet corresponding to the second robot's ArUco tag.
-- `Robot #2 ID X Coord:` Second robot's X coordinate in centimeters.
-- `Robot #2 ID Y Coord:` Second robot's Y coordinate in centimeters.
+- `>` Start (1 byte).
+- `Match Byte` Binary (0/1) indicating whether a match is ongoing (1 byte).
+- `Time` Match time in seconds, represented as 4 bytes.
+- `Robot #1 ID` Alphabet corresponding to the first robot's ArUco tag (1 byte).
+- `Robot #1 X Coord` First robot's X coordinate in centimeters (3 bytes).
+- `Robot #1 Y Coord` First robot's Y coordinate in centimeters (3 bytes).
+- `Robot #2 ID` Alphabet corresponding to the second robot's ArUco tag (1 byte).
+- `Robot #2 ID X Coord` Second robot's X coordinate in centimeters (3 bytes).
+- `Robot #2 ID Y Coord` Second robot's Y coordinate in centimeters (3 bytes).
+- `...`
+- `;` End (1 byte).
 
-.. and so on.
 
 This information is sent to all the XBee 3 modules as a string, as shown in the figure above. 
 
