@@ -5,7 +5,7 @@
 *Last updated by Anway Pimpalkar, March 21st 2024*
 
 
-> *Sample code, PCB Layouts and CAD available at*
+> *Sample code, PCB Layouts and CAD available at https://github.com/anwaypimpalkar/jhockey-tracking*
 
 
 ## Overview
@@ -24,7 +24,7 @@ This system tracks ArUco tags on top of each robot using a computer vision algor
 Each robot is assigned a unique ArUco tag and a corresponding alphabetical ID (A, B, C, D, etc.). These tags are tracked using a computer vision (CV) algorithm developed by Naveed Riaziat, which captures the X and Y coordinates of the robot in centimeters. The tracking system runs on a JeVois Smart Machine Vision Camera connected to a Raspberry Pi.
 
 > The unique IDs are specific to each ArUco tag and XBee module; therefore, you must keep them paired together.
-![](Images/Pairs.png)
+![](src/Pairs.png)
 
 You can learn more about ArUco tags and tracking algorithms at https://docs.opencv.org/4.x/d5/dae/tutorial_aruco_detection.html
 
@@ -42,11 +42,11 @@ You can check out this resource for a more detailed overview of ZigBee: https://
 
 ZigBee modules (called XBees) can mesh together to form a robust network where each node can transmit and relay data to other nodes. This meshing capability allows for extended range and redundancy, as data can find multiple paths to reach its destination. The dynamic nature of ZigBee mesh networks ensures that if one node fails, data can be rerouted through other nodes, enhancing network reliability.
 
-![](Images/Mesh.png)
+![](src/Mesh.png)
 
 ### How does it work for our jHockey setup?
 
-![](Images/FlowChart.png)
+![](src/FlowChart.png)
 
 #### Sending the Match Information
 
@@ -82,16 +82,16 @@ The Arduino and XBee module communicate via a UART protocol. On an Arduino Mega,
 
 Fundamentally, XBee modules operate with 3.3V digital logic, while the Arduino Mega operates at 5V digital logic. Therefore, it is necessary to convert the logic voltage levels between these devices to ensure proper transmission. For this task, we use a bidirectional level converter, as illustrated in the figure below.
 
-![](Images/LevelConverter.png)
+![](src/LevelConverter.png)
 
 The circuitry for this has been condensed into a printed circuit board (PCB) for your convenience, on which you will only need to mount the respective components. Below, you will find a sample connection diagram that corresponds to the provided sample code. If necessary, you can change the hardware serial ports.
 
 The `DOUT` and `DIN` labels on the PCB corresponds to the respective pins on the XBee module. You can learn more about them in the [XBee 3 datasheet](https://www.digi.com/resources/documentation/digidocs/pdfs/90001543.pdf). 
 
-![](Images/Connections.png)
+![](src/Connections.png)
 
 #### Talking with the XBee Module
 
 The XBee module communicates with the Arduino via UART. To send a location query, you must transmit a `?` character to the XBee module, which will then respond with the latest coordinate information in the comma-delimited format previously mentioned.
 
-> *Sample code*
+> *Sample code https://github.com/anwaypimpalkar/jhockey-tracking/tree/main/xbee_sample_code*
