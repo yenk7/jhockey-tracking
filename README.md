@@ -1,22 +1,22 @@
 # jHockey Robot Tracking and Communications Setup
 
-### Mechatronics, Spring 2024
+For Mechatronics, Spring 2024
 
-*Last updated by Anway Pimpalkar, March 21st 2024*
+*Last updated by Anway Pimpalkar, March 27 2024*
 
 
-> *Sample code, PCB Layouts and CAD available at https://github.com/anwaypimpalkar/jhockey-tracking*
+> *Latest sample code, PCB Layouts and STEP files available at https://github.com/anwaypimpalkar/jhockey-tracking*
 
 
 ## Overview
 
 For the hockey robots you are constructing for your final project, it is essential to know the robot's exact location at any given time to determine the correct orientation and movements for approaching and shooting towards the goal. To simplify your project, we have constructed the tracking system for you.
 
-This system tracks ArUco tags on top of each robot using a computer vision algorithm and sends each robot its coordinates using a ZigBee protocol.
+This system tracks ArUco tags on top of each robot using a computer vision algorithm and sends each roboPt its coordinates using a ZigBee protocol.
 
 ## Robot Tracking - ArUco Tags, Computer Vision
 
-Each robot is assigned a unique ArUco tag and a corresponding alphabetical ID (A, B, C, D, etc.). These tags are tracked using a computer vision (CV) algorithm developed by Naveed Riaziat, which captures the X and Y coordinates of the robot in centimeters. The tracking system runs on a JeVois Smart Machine Vision Camera connected to a Raspberry Pi.
+Each robot is assigned a unique ArUco tag and a corresponding alphabetical ID (A, B, C, D, etc.). These tags are tracked using a Computer Vision (CV) algorithm developed by Naveed Riaziat, which captures the X and Y coordinates of the robot in centimeters. The tracking system runs on a JeVois Smart Machine Vision Camera connected to a Raspberry Pi.
 
 > The unique IDs are specific to each ArUco tag and XBee module; therefore, you must keep them paired together.
 ![](src/Pairs.png)
@@ -66,16 +66,25 @@ This information is sent to all the XBee 3 modules as a string, as shown in the 
 
 > XBee 3 Module Datasheet: https://www.digi.com/resources/documentation/digidocs/pdfs/90001543.pdf
 
-#### Receiving and Processing the Match Information
+#### Receiving and Processing the Match Information <span style="color:red">**IMPORTANT!**</span>
 
 The XBee modules have an inbuilt processor on them, capable of running Micropython scripts. We have flashed a script which processes the match information, and only returns selected information back to your Arduino-based robot. The script has a predefined `Robot ID`, and parses the string for information pertaining to that particular ID. 
 
-The output from the module after parsing the string is a comma-delimited string, which looks like  `M,TTTT,X,Y`.
+The output from the module after parsing the string is a comma-delimited string, which looks like  `M,TTTT,XXX,YYY`.
 
-- If there is no information for the bot available in the message, it returns `no tracking information available`.
-- If the ZigBee module is not receiving any information at all, it returns `no active tx found`.
+where, 
 
-#### Interfacing the XBee Module with an Arduino
+- `M` is the Match Byte, which is a binary (0/1) digit indicating whether a match is ongoing or not.
+- `TTTT` is the match time in seconds. If a match is not ongoing, it will be set to 0000.
+- `XXX` is your bot's X coordinate with respect to the arena in centimeters.
+- `YYY` is your bot's Y coordinate with respect to the arena in centimeters.
+
+**Other expected outputs:**
+
+- If the ZigBee module is not receiving any information at all, it returns `no active tx found`. The timeout duration for losing a connection is set to 5 seconds.
+- If your bots information is not sent across by the Tx, you will receive your information as a string like `M,TTTT,---,---`.
+
+#### Interfacing the XBee Module with an Arduino <span style="color:red">**IMPORTANT!**</span>
 
 The Arduino and XBee module communicate via a UART protocol. On an Arduino Mega, four hardware serial lines are available for UART communication. One of these is used to establish communication with our computer, and a second one is utilized for XBee communication.
 
@@ -95,8 +104,11 @@ The `DOUT` and `DIN` labels on the PCB corresponds to the respective pins on the
 
 ![](src/Connections.png)
 
-#### Talking with the XBee Module
+#### Talking with the XBee Module <span style="color:red">**IMPORTANT!**</span>
 
 The XBee module communicates with the Arduino via UART. To send a location query, you must transmit a `?` character to the XBee module, which will then respond with the latest coordinate information in the comma-delimited format previously mentioned.
 
 > *Sample code available at https://github.com/anwaypimpalkar/jhockey-tracking/tree/main/xbee_sample_code*
+
+### <span style="color:grey">**May the best bots win.**</span>
+![](src/RobotDancing.gif)
