@@ -53,11 +53,11 @@ The locations of all the robots on the arena are sent within the same packet. Th
 - `Match Byte` Binary (0/1) indicating whether a match is ongoing (1 byte).
 - `Time` Match time in seconds, represented as 4 bytes.
 - `Robot #1 ID` Alphabet corresponding to the first robot's ArUco tag (1 byte).
-- `Robot #1 X Coord` First robot's X coordinate in centimeters (3 bytes).
-- `Robot #1 Y Coord` First robot's Y coordinate in centimeters (3 bytes).
+- `Robot #1 X` First robot's X coordinate in centimeters (3 bytes).
+- `Robot #1 Y` First robot's Y coordinate in centimeters (3 bytes).
 - `Robot #2 ID` Alphabet corresponding to the second robot's ArUco tag (1 byte).
-- `Robot #2 ID X Coord` Second robot's X coordinate in centimeters (3 bytes).
-- `Robot #2 ID Y Coord` Second robot's Y coordinate in centimeters (3 bytes).
+- `Robot #2 X` Second robot's X coordinate in centimeters (3 bytes).
+- `Robot #2 Y` Second robot's Y coordinate in centimeters (3 bytes).
 - `...`
 - `;` End (1 byte).
 
@@ -110,5 +110,5 @@ The XBee module communicates with the Arduino via UART. To send a location query
 
 > *Sample code available at https://github.com/anwaypimpalkar/jhockey-tracking/tree/main/xbee_sample_code*
 
-### <span style="color:grey">**May the best bots win.**</span>
+### <span style="color:grey">**May the best bots win!**</span>
 ![](src/RobotDancing.gif)
