@@ -11,14 +11,14 @@ For Mechatronics, Spring 2024
 ## Overview
 
 For the hockey robots you are constructing for your final project, it is essential to know the robot's exact location at any given time to determine the correct orientation and movements for approaching and shooting towards the goal. To simplify your project, we have constructed the tracking system for you.
-
-This system tracks ArUco tags on top of each robot using a computer vision algorithm and sends each roboPt its coordinates using a ZigBee protocol.
+This system tracks ArUco tags on top of each robot using a computer vision algorithm and sends each robot its coordinates using a ZigBee protocol.
 
 ## Robot Tracking - ArUco Tags, Computer Vision
 
-Each robot is assigned a unique ArUco tag and a corresponding alphabetical ID (A, B, C, D, etc.). These tags are tracked using a Computer Vision (CV) algorithm developed by Naveed Riaziat, which captures the X and Y coordinates of the robot in centimeters. The tracking system runs on a JeVois Smart Machine Vision Camera connected to a Raspberry Pi.
+Each robot is assigned a unique ArUco tag and a corresponding alphabetical ID (A, B, C, D, etc.). These tags are tracked using a Computer Vision (CV) algorithm which captures the X and Y coordinates of the robot in centimeters. The tracking system runs on a JeVois Smart Machine Vision Camera connected to a Raspberry Pi.
 
-> The unique IDs are specific to each ArUco tag and XBee module; therefore, you must keep them paired together.
+The unique IDs are specific to each ArUco tag and XBee module; therefore, you must keep them paired together.
+
 ![](src/Pairs.png)
 
 You can learn more about ArUco tags and tracking algorithms at https://docs.opencv.org/4.x/d5/dae/tutorial_aruco_detection.html
@@ -45,7 +45,7 @@ ZigBee modules (called XBees) can mesh together to form a  network where each no
 
 #### Sending the Match Information
 
-In our setup, the CV algorithm supplies the robot tracking information to the Raspberry Pi, which then broadcasts the match information via a XBee 3 Tx module to all receiver nodes on the same Personal Area Network (PAN) channel.
+In our setup, the CV algorithm supplies the robot tracking information to the Raspberry Pi, which then broadcasts the match information via a XBee 3 Tx module to all receiver nodes on the same Personal Area Network (PAN) channel. At a time, a maximum of 15 bots can receive information at once.
 
 The locations of all the robots on the arena are sent within the same packet. The match information consists of the following information:
 
@@ -59,6 +59,7 @@ The locations of all the robots on the arena are sent within the same packet. Th
 - `Robot #2 X` Second robot's X coordinate in centimeters (3 bytes).
 - `Robot #2 Y` Second robot's Y coordinate in centimeters (3 bytes).
 - `...`
+- `Checksum` Checksum (2 bytes).
 - `;` End (1 byte).
 
 
@@ -79,16 +80,19 @@ where,
 - `XXX` is your bot's X coordinate with respect to the arena in centimeters.
 - `YYY` is your bot's Y coordinate with respect to the arena in centimeters.
 
-**Other expected outputs:**
+#### Summary of Expected Outputs
 
-- If the ZigBee module is not receiving any information at all, it returns `no active tx found`. The timeout duration for losing a connection is set to 5 seconds.
-- If your bots information is not sent across by the Tx, you will receive your information as a string like `M,TTTT,---,---`.
+- `M,TTTT,XXX,YYY` Ideal output.
+- `M,TTTT,---,---` If your bot’s information is not sent across by the Tx (camera has not detected it).
+- `?,????,---,---` If the XBee module is not receiving any information from the Tx for more than 1 second.
+- `/,////,---,---` If the checksums are not matching.
 
 #### Interfacing the XBee Module with an Arduino <span style="color:red">**IMPORTANT!**</span>
 
 The Arduino and XBee module communicate via a UART protocol. On an Arduino Mega, four hardware serial lines are available for UART communication. One of these is used to establish communication with our computer, and a second one is utilized for XBee communication.
 
 XBee modules operate with 3.3V digital logic, while the Arduino Mega operates at 5V digital logic. Therefore, it is necessary to convert the logic voltage levels between these devices to ensure proper transmission. For this task, we use a bidirectional level converter, as illustrated in the figure below.
+
 
 ![](src/LevelConverter.png)
 
