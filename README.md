@@ -83,7 +83,7 @@ where,
 #### Summary of Expected Outputs
 
 - `M,TTTT,XXX,YYY` Ideal output.
-- `M,TTTT,---,---` If your bot’s information is not sent across by the Tx (camera has not detected it).
+- `M,TTTT,---,---` If your bot’s information is not sent across by the Tx (camera has not detected it) OR the tracking system is not turned on.
 - `?,????,---,---` If the XBee module is not receiving any information from the Tx for more than 1 second.
 - `/,////,---,---` If the checksums are not matching.
 
