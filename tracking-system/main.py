@@ -1,5 +1,5 @@
-# # Open Chrome with 
-# # Note: taskset command not available on macOS
+# Mac-compatible version - removed Linux-specific CPU affinity commands
+# To launch the visualization: open Chrome and navigate to file:///Users/jhumechatronics/Desktop/mechatronics/visualize.html
 
 import asyncio
 import websockets
@@ -7,7 +7,8 @@ import json
 import os
 import subprocess
 import platform
-from aruco_tracker import track_aruco_tags
+#from aruco_tracker import track_aruco_tags
+from aruco_tracker_2 import track_aruco_tags
 
 connected_clients = set()
 lock_state = False  # Global lock state
@@ -15,17 +16,20 @@ lock_queue = asyncio.Queue()  # Queue to send updates to aruco_tracker.py
 
 
 async def track_and_broadcast():
-    # CPU affinity not supported on macOS
-    if platform.system() != "Darwin":
-        import psutil
-        p = psutil.Process(os.getpid())
-        try:
-            p.cpu_affinity([0])  # Assign main.py to core 1
-        except AttributeError:
-            print("CPU affinity not supported on this platform")
+    # No CPU affinity on macOS - instead use higher task priority if needed
     
     async for output_dict in track_aruco_tags(lock_queue):  # Pass queue here
-        tracking_message = json.dumps({"type": "tracking_data", "data": output_dict})
+        # Add auto-lock info to the message if available
+        if "auto_lock_info" in output_dict:
+            auto_lock_info = output_dict.pop("auto_lock_info")
+            tracking_message = json.dumps({
+                "type": "tracking_data", 
+                "data": output_dict,
+                "auto_lock_info": auto_lock_info
+            })
+        else:
+            tracking_message = json.dumps({"type": "tracking_data", "data": output_dict})
+            
         if connected_clients:
             await asyncio.gather(
                 *[client.send(tracking_message) for client in connected_clients]
@@ -46,6 +50,17 @@ async def handler(websocket):
                 print(f"Lock state updated: {lock_state}")
                 # Send new lock state to queue
                 await lock_queue.put(lock_state)
+                
+            if data["type"] == "auto_lock":
+                # Handle auto-lock command
+                print("Auto-lock command received: Starting auto detection of corners")
+                # Add a quick response to the client to acknowledge the command
+                await websocket.send(json.dumps({
+                    "type": "command_ack",
+                    "message": "Auto-lock command received"
+                }))
+                # Then queue the actual command
+                await lock_queue.put({"auto_lock": True})
 
             if data["type"] == "match_dict":
                 match_message = json.dumps({"type": "match_dict", "data": data["data"]})
@@ -60,25 +75,31 @@ async def handler(websocket):
 
 
 async def main():
+    # Check if we're on macOS
+    is_macos = platform.system() == 'Darwin'
+    
+    # Set process priority if possible
+    try:
+        if not is_macos:
+            import psutil
+            p = psutil.Process(os.getpid())
+            p.nice(psutil.HIGH_PRIORITY_CLASS if os.name == 'nt' else -10)
+    except (ImportError, PermissionError):
+        print("Note: Could not set process priority")
+
     # Launch zigbee.py as a subprocess
     zigbee_process = subprocess.Popen(["python3", "zigbee.py"])
     
-    # Set CPU affinity if supported (not on macOS)
-    if platform.system() != "Darwin":
-        try:
-            import psutil
-            zigbee_psutil_process = psutil.Process(zigbee_process.pid)
-            zigbee_psutil_process.cpu_affinity([1])
-            core_info = "(core 2)"
-        except (ImportError, AttributeError):
-            core_info = "(CPU affinity not supported)"
-    else:
-        core_info = "(CPU affinity not available on macOS)"
-
+    print(f"Running on: {platform.system()} {platform.machine()}")
+    
+    # On M1 Macs, we rely on the system's task scheduler instead of manual CPU affinity
+    if is_macos and "arm" in platform.machine().lower():
+        print("Detected Apple Silicon - using system scheduler for performance")
+    
     # Start WebSocket server and tracking loop
     server = await websockets.serve(handler, "localhost", 8765)
-    print(f"WebSocket server started on ws://localhost:8765")
-    print(f"zigbee.py started on PID {zigbee_process.pid} {core_info}")
+    print("WebSocket server started on ws://localhost:8765")
+    print(f"zigbee.py started on PID {zigbee_process.pid}")
 
     try:
         await asyncio.gather(server.wait_closed(), track_and_broadcast())
@@ -88,5 +109,14 @@ async def main():
 
 
 if __name__ == "__main__":
+    # For Mac M1, optimize event loop policy if available
+    if platform.system() == 'Darwin' and "arm" in platform.machine().lower():
+        try:
+            import uvloop
+            asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+            print("Using uvloop for improved performance")
+        except ImportError:
+            print("Note: Install uvloop with 'pip install uvloop' for better performance")
+    
     asyncio.run(main())
 

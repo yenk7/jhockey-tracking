@@ -34,8 +34,9 @@
       }
       .tracker-container {
         position: relative;
-        width: 600px;
-        height: 600px;
+        width: 300px;
+        /* max-height: 600px; */
+        /* height: 600px; */
         border: 2px solid black;
         margin-bottom: 20px;
         display: flex;
@@ -258,9 +259,9 @@
         }
       };
 
-      function mapToPixel(x, y, xMin, xMax, yMin, yMax, containerSize) {
-        const xPixel = ((x - xMin) / (xMax - xMin)) * containerSize;
-        const yPixel = ((yMax - y) / (yMax - yMin)) * containerSize; // Invert Y
+      function mapToPixel(x, y, xMin, xMax, yMin, yMax, containerWidth, containerHeight) {
+        const xPixel = ((x - xMin) / (xMax - xMin)) * containerWidth;
+        const yPixel = ((yMax - y) / (yMax - yMin)) * containerHeight; // Invert Y
         return { xPixel, yPixel };
       }
 
@@ -270,9 +271,17 @@
         const fps = outputDict.fps;
 
         const xMin = 0 * 30.48; // ft to cm
-        const xMax = 4 * 30.48;
+        const xMax = 3.74 * 30.48;
         const yMin = 0 * 30.48;
-        const yMax = 4 * 30.48;
+        const yMax = 7.75 * 30.48;
+
+        const trackerContainer = document.querySelector(".tracker-container");
+        const aspectRatio = (yMax - yMin) / (xMax - xMin); // height / width
+        const baseWidth = trackerContainer.clientWidth;
+        const newHeight = baseWidth * aspectRatio;
+
+        trackerContainer.style.width = `${baseWidth}px`;
+        trackerContainer.style.height = `${newHeight}px`;
 
         const cornerTagPositions = {
           0: [xMin, yMin],
@@ -284,15 +293,11 @@
         for (let i = 0; i <= 3; i++) {
           const cornerElement = document.getElementById(`corner-${i}`);
           const [x, y] = cornerTagPositions[i];
-          const { xPixel, yPixel } = mapToPixel(
-            x,
-            y,
-            xMin,
-            xMax,
-            yMin,
-            yMax,
-            600
-          );
+          const containerWidth = trackerContainer.clientWidth;
+          const containerHeight = trackerContainer.clientHeight;
+
+          const { xPixel, yPixel } = mapToPixel(x, y, xMin, xMax, yMin, yMax, containerWidth, containerHeight);
+
 
           cornerElement.style.left = `${xPixel - 40}px`; // Centering (80px width)
           cornerElement.style.top = `${yPixel - 40}px`; // Centering (80px height)
@@ -315,15 +320,12 @@
         for (const [id, position] of Object.entries(seenTags)) {
           const existingCard = document.getElementById(`robot-${id}`);
           const [x, y] = position;
-          const { xPixel, yPixel } = mapToPixel(
-            x,
-            y,
-            xMin,
-            xMax,
-            yMin,
-            yMax,
-            600
-          );
+          
+          const containerWidth = trackerContainer.clientWidth;
+          const containerHeight = trackerContainer.clientHeight;
+
+          const { xPixel, yPixel } = mapToPixel(x, y, xMin, xMax, yMin, yMax, containerWidth, containerHeight);
+
 
           let card;
           if (existingCard) {
