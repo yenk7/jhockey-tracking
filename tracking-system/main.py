@@ -1,12 +1,12 @@
 # # Open Chrome with 
-# # taskset -c 2 google-chrome
+# # Note: taskset command not available on macOS
 
 import asyncio
 import websockets
 import json
 import os
-import psutil
 import subprocess
+import platform
 from aruco_tracker import track_aruco_tags
 
 connected_clients = set()
@@ -15,9 +15,15 @@ lock_queue = asyncio.Queue()  # Queue to send updates to aruco_tracker.py
 
 
 async def track_and_broadcast():
-    p = psutil.Process(os.getpid())
-    p.cpu_affinity([0])  # Assign main.py to core 1
-
+    # CPU affinity not supported on macOS
+    if platform.system() != "Darwin":
+        import psutil
+        p = psutil.Process(os.getpid())
+        try:
+            p.cpu_affinity([0])  # Assign main.py to core 1
+        except AttributeError:
+            print("CPU affinity not supported on this platform")
+    
     async for output_dict in track_aruco_tags(lock_queue):  # Pass queue here
         tracking_message = json.dumps({"type": "tracking_data", "data": output_dict})
         if connected_clients:
@@ -26,7 +32,7 @@ async def track_and_broadcast():
             )
 
 
-async def handler(websocket, path):
+async def handler(websocket):
     
     global lock_state
 
@@ -56,15 +62,23 @@ async def handler(websocket, path):
 async def main():
     # Launch zigbee.py as a subprocess
     zigbee_process = subprocess.Popen(["python3", "zigbee.py"])
-
-    # Set CPU affinity to core 2
-    zigbee_psutil_process = psutil.Process(zigbee_process.pid)
-    zigbee_psutil_process.cpu_affinity([1])
+    
+    # Set CPU affinity if supported (not on macOS)
+    if platform.system() != "Darwin":
+        try:
+            import psutil
+            zigbee_psutil_process = psutil.Process(zigbee_process.pid)
+            zigbee_psutil_process.cpu_affinity([1])
+            core_info = "(core 2)"
+        except (ImportError, AttributeError):
+            core_info = "(CPU affinity not supported)"
+    else:
+        core_info = "(CPU affinity not available on macOS)"
 
     # Start WebSocket server and tracking loop
     server = await websockets.serve(handler, "localhost", 8765)
-    print("WebSocket server started on ws://localhost:8765 (core 1)")
-    print(f"zigbee.py started on PID {zigbee_process.pid} (core 2)")
+    print(f"WebSocket server started on ws://localhost:8765")
+    print(f"zigbee.py started on PID {zigbee_process.pid} {core_info}")
 
     try:
         await asyncio.gather(server.wait_closed(), track_and_broadcast())

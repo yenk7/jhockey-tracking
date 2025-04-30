@@ -1,117 +1,45 @@
-# import asyncio
-# import websockets
-# import json
-# import struct
-# import serial
-# import serial.tools.list_ports
-
-# from digi.xbee.devices import XBeeDevice
-
-# BAUD_RATE = 115200
-# TARGET_HWID_SUBSTRING = "D30DP79H"
-
-
-# def find_serial_port_by_hwid(target_hwid_substring):
-#     """Find the serial port with a specific HWID substring."""
-#     ports = serial.tools.list_ports.comports()
-#     for port in ports:
-#         if target_hwid_substring in port.hwid:
-#             print(f"Found target device on port: {port.device}")
-#             return port.device
-#     raise Exception(f"No serial port with HWID containing '{target_hwid_substring}' found.")
-
-
-# async def receive_data():
-#     uri = "ws://localhost:8765"
-
-#     # Automatically select serial port based on HWID substring
-#     serial_port = find_serial_port_by_hwid(TARGET_HWID_SUBSTRING)
-
-#     # Open the serial port
-#     ser = serial.Serial(serial_port, BAUD_RATE)
-
-#     async with websockets.connect(uri) as websocket:
-#         print("Connected to WebSocket server.")
-
-#         robot_tags = {}
-#         match_dict = {"match_bit": 0, "match_time": 0}
-
-#         while True:
-#             message = await websocket.recv()
-#             message = json.loads(message)
-
-#             if message["type"] == "tracking_data":
-#                 robot_tags = message["data"].get("robot_tags", {})
-
-#             elif message["type"] == "match_dict":
-#                 match_dict = message["data"]
-
-#             # Construct and send payload after receiving updated data
-#             payload = construct_payload(robot_tags, match_dict)
-
-#             print(payload)
-#             ser.write(payload.encode())
-
-
-# def construct_payload(robot_tags, match_dict):
-#     """
-#     Constructs the binary payload according to the match and robot tracking info.
-#     """
-
-#     payload = ''
-#     payload += '>'
-#     payload += f"{match_dict['match_bit']:01d}"
-#     payload += f"{match_dict['match_time']:04d}"
-
-#     # Parse robot positions and limit to 15 robots
-#     parsed_robots = []
-#     for tag_id, position in robot_tags.items():
-#         x_cm = max(0, int(position[0]))
-#         y_cm = max(0, int(position[1]))
-#         parsed_robots.append((int(tag_id), x_cm, y_cm))
-
-#     # Limit to 15 robots
-#     parsed_robots = parsed_robots[:15]
-
-#     # Add robot information to the payload
-#     for tag_id, x, y in parsed_robots:
-#         payload += chr(61 + tag_id)  # 'A' for 0, 'B' for 1, etc.
-#         payload += f"{x:03d}"  # X coordinate padded to 3 digits
-#         payload += f"{y:03d}"  # Y coordinate padded to 3 digits
-
-#     # Compute checksum as sum of ASCII values mod 100 (2 digits)
-#     checksum = sum([ord(c) for c in payload] + [ord(';')]) % 64
-#     payload += f"{checksum:02d}"  # Add checksum padded to 2 digits
-
-#     payload += ';'  # End byte
-
-#     return payload
-
-
-# if __name__ == "__main__":
-#     asyncio.run(receive_data())
-
-
 import asyncio
 import websockets
 import json
 import serial.tools.list_ports
+import platform
 
 from digi.xbee.devices import XBeeDevice
 
 BAUD_RATE = 115200
-# Use the HWID substring from the working function.
+# Use a more generic approach for port detection
 TARGET_HWID_SUBSTRING = "0"
 
 
-def find_serial_port_by_hwid(target_hwid_substring):
-    """Find the serial port with a specific HWID substring."""
+def find_serial_port():
+    """Find the XBee serial port with platform-specific approaches."""
     ports = serial.tools.list_ports.comports()
+    
+    # Print available ports for debugging
+    print("Available serial ports:")
     for port in ports:
-        if target_hwid_substring in port.hwid:
-            print(f"Found XBee device on port: {port.device}")
-            return port.device
-    raise Exception(f"No serial port with HWID containing '{target_hwid_substring}' found.")
+        print(f"  {port.device}: {port.description} [hwid: {port.hwid}]")
+    
+    # On macOS, look for ports with specific patterns
+    if platform.system() == "Darwin":
+        # First try to find XBee devices specifically
+        for port in ports:
+            if "XBee" in port.description or "FTDI" in port.description:
+                print(f"Found likely XBee device on port: {port.device}")
+                return port.device
+                
+        # Fall back to typical macOS USB-Serial patterns
+        for port in ports:
+            if "usbserial" in port.device or "usbmodem" in port.device:
+                print(f"Found USB serial device on port: {port.device}")
+                return port.device
+    
+    # General approach - use first available port if no specific device found
+    if ports:
+        print(f"Using first available port: {ports[0].device}")
+        return ports[0].device
+        
+    raise Exception("No serial ports found. Check if XBee device is connected.")
 
 
 def construct_payload(robot_tags, match_dict):
@@ -177,17 +105,17 @@ async def receive_data(device):
 
 
 async def main():
-    # Find the serial port for the XBee device.
-    serial_port = find_serial_port_by_hwid(TARGET_HWID_SUBSTRING)
-    device = XBeeDevice(serial_port, BAUD_RATE)
+    # Find the serial port for the XBee device with improved detection
     try:
+        serial_port = find_serial_port()
+        device = XBeeDevice(serial_port, BAUD_RATE)
         device.open()
-        print("XBee device opened.")
+        print(f"XBee device opened on port {serial_port}.")
         await receive_data(device)
     except Exception as e:
         print("An error occurred:", e)
     finally:
-        if device is not None and device.is_open():
+        if 'device' in locals() and device is not None and device.is_open():
             device.close()
             print("XBee device closed.")
 
