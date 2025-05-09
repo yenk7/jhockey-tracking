@@ -1,5 +1,7 @@
 # Mac-compatible version - removed Linux-specific CPU affinity commands
 # To launch the visualization: open Chrome and navigate to file:///Users/jhumechatronics/Desktop/mechatronics/visualize.html
+#run calibration mode with:
+#python main.py --auto-calibrate --frames 100 --max-combinations 100
 
 import asyncio
 import websockets
@@ -7,6 +9,8 @@ import json
 import os
 import subprocess
 import platform
+import sys
+import argparse
 #from aruco_tracker import track_aruco_tags
 from aruco_tracker_2 import track_aruco_tags
 
@@ -107,16 +111,51 @@ async def main():
         zigbee_process.terminate()
         print("zigbee.py terminated.")
 
+def run_calibration_mode(auto_mode=False, frames=20, max_combinations=50, scale_factor=0.7):
+    """Run the ArUco marker calibration tool"""
+    print("Starting ArUco calibration mode...")
+    try:
+        import aruco_tracker_calibration
+        if auto_mode:
+            print("Running automated calibration process...")
+            aruco_tracker_calibration.run_auto_calibration(scale_factor, frames, max_combinations)
+        else:
+            aruco_tracker_calibration.run_calibration(scale_factor)
+    except ImportError:
+        print("Error: Could not import aruco_tracker_calibration module")
+    except Exception as e:
+        print(f"Error in calibration mode: {e}")
 
 if __name__ == "__main__":
-    # For Mac M1, optimize event loop policy if available
-    if platform.system() == 'Darwin' and "arm" in platform.machine().lower():
-        try:
-            import uvloop
-            asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-            print("Using uvloop for improved performance")
-        except ImportError:
-            print("Note: Install uvloop with 'pip install uvloop' for better performance")
+    parser = argparse.ArgumentParser(description="ArUco tracking system for Mechatronics")
+    parser.add_argument("--calibrate", "-c", action="store_true",
+                      help="Run in calibration mode to optimize ArUco detection parameters")
+    parser.add_argument("--auto-calibrate", "-a", action="store_true",
+                      help="Run automatic calibration to find optimal parameters without manual intervention")
+    parser.add_argument("--frames", type=int, default=20,
+                      help="Number of frames to capture for automated calibration (default: 20)")
+    parser.add_argument("--max-combinations", type=int, default=50,
+                      help="Maximum parameter combinations to test in auto calibration (default: 50)")
+    parser.add_argument("--scale", type=float, default=0.7,
+                      help="Scale factor for processing (default: 0.7)")
     
-    asyncio.run(main())
+    args = parser.parse_args()
+    
+    if args.calibrate:
+        # Manual calibration mode
+        run_calibration_mode(False, args.frames, args.max_combinations, args.scale)
+    elif args.auto_calibrate:
+        # Automatic calibration mode
+        run_calibration_mode(True, args.frames, args.max_combinations, args.scale)
+    else:
+        # For Mac M1, optimize event loop policy if available
+        if platform.system() == 'Darwin' and "arm" in platform.machine().lower():
+            try:
+                import uvloop
+                asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+                print("Using uvloop for improved performance")
+            except ImportError:
+                print("Note: Install uvloop with 'pip install uvloop' for better performance")
+        
+        asyncio.run(main())
 

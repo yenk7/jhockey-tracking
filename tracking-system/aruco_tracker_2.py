@@ -3,31 +3,64 @@ import numpy as np
 import time
 import asyncio
 import base64
+import os
+import json
 
-locked_corners = None  # Stores the locked corner positions
+# Store both corner positions and their pixel locations when locked
+locked_corners = None  # World coordinates of corners
+locked_pixel_positions = None  # Pixel positions of corners when locked
 lock_state = False  # Indicates whether corners are locked
+
+def load_calibration_parameters(filename="best_aruco_params.json"):
+    """Load calibration parameters from a JSON file if it exists"""
+    try:
+        with open(filename, 'r') as f:
+            params = json.load(f)
+        print(f"✅ Loaded calibration parameters from {filename}")
+        return params
+    except FileNotFoundError:
+        print(f"ℹ️ No calibration file found at {filename}, using default parameters")
+        return None
+    except Exception as e:
+        print(f"⚠️ Error loading parameters: {e}")
+        return None
 
 async def track_aruco_tags(lock_queue, scale_factor=0.7):
     
-    global locked_corners, lock_state
+    global locked_corners, locked_pixel_positions, lock_state
     print(f"🟢 Initial lock state: {lock_state}", flush=True)
 
     dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
     detector_params = cv2.aruco.DetectorParameters()
     
-    detector_params.adaptiveThreshWinSizeMin = 3
-    detector_params.adaptiveThreshWinSizeMax = 30
-    detector_params.adaptiveThreshWinSizeStep = 10
-    detector_params.minMarkerPerimeterRate = 0.03
-    detector_params.maxMarkerPerimeterRate = 4.0
-    detector_params.polygonalApproxAccuracyRate = 0.02
-    detector_params.minCornerDistanceRate = 0.05
-    detector_params.minMarkerDistanceRate = 0.05
-    detector_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_CONTOUR
+    # Try to load calibrated parameters if they exist
+    calibration = load_calibration_parameters()
+    if calibration:
+        # Apply loaded parameters
+        for param_name, param_value in calibration.items():
+            if hasattr(detector_params, param_name):
+                setattr(detector_params, param_name, param_value)
+                print(f"  - Applied {param_name}: {param_value}")
+    else:
+        # Use default parameters
+        detector_params.adaptiveThreshWinSizeMin = 3
+        detector_params.adaptiveThreshWinSizeMax = 30
+        detector_params.adaptiveThreshWinSizeStep = 10
+        detector_params.minMarkerPerimeterRate = 0.03
+        detector_params.maxMarkerPerimeterRate = 4.0
+        detector_params.polygonalApproxAccuracyRate = 0.02
+        detector_params.minCornerDistanceRate = 0.05
+        detector_params.minMarkerDistanceRate = 0.05
+        detector_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_CONTOUR
 
+    # Set required parameters that are causing the error
+    detector_params.markerBorderBits = 1  # Default value, must be greater than 0
+    detector_params.minSideLengthCanonicalImg = 16  # Determines the cell size
+    detector_params.perspectiveRemoveIgnoredMarginPerCell = 0.13  # Between 0 and 1
+    
     detector = cv2.aruco.ArucoDetector(dictionary, detector_params)
     cap = cv2.VideoCapture(0)
-        # Set camera resolution to 1920x1080
+    # Set camera resolution to 1920x1080
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
     
@@ -45,15 +78,36 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7):
     }
 
     while True:
+        # Check for lock state updates
         try:
-            lock_state = lock_queue.get_nowait()
+            new_lock_state = lock_queue.get_nowait()
+            # If lock state changed from unlocked to locked, save current corners
+            if new_lock_state and not lock_state:
+                if detected_corner_positions and pixel_positions:
+                    # When locking, store both world coordinates and pixel positions
+                    locked_corners = {int(k): v.copy() for k, v in detected_corner_positions.items()}
+                    locked_pixel_positions = {int(k): v.copy() for k, v in pixel_positions.items() if int(k) <= 3}
+                    print(f"🔒 Corners locked: {len(locked_corners)} corners saved")
+                else:
+                    print("⚠️ No corners to lock!")
+                    # Don't update lock state if there are no corners to lock
+                    continue
+            # If unlocking, clear locked corners
+            elif not new_lock_state and lock_state:
+                print("🔓 Corners unlocked")
+                locked_corners = None
+                locked_pixel_positions = None
+            
+            lock_state = new_lock_state
+                
         except asyncio.QueueEmpty:
             pass
 
         ret, frame = cap.read()
         if not ret:
             print("Failed to grab frame")
-            break
+            await asyncio.sleep(0.1)
+            continue
 
         frame = cv2.rotate(frame, cv2.ROTATE_180)
 
@@ -75,11 +129,10 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7):
             cv2.aruco.drawDetectedMarkers(frame, corners, ids)
 
             for i, corner in enumerate(corners):
-                marker_id = ids[i][0]
+                marker_id = int(ids[i][0])  # Convert NumPy int to Python int
 
                 if marker_id >= 30:
                     continue
-
 
                 center = np.mean(corner[0], axis=0)
 
@@ -94,71 +147,131 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7):
                 cv2.circle(frame, center_int, 5, (0, 255, 0), -1)
                 cv2.putText(frame, f"ID: {marker_id}", (center_int[0] + 10, center_int[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-            # If locked, use locked corners instead of newly detected ones
-            if lock_state and locked_corners:   
-                pixel_positions_corners = {
-                    tag_id: detected_pixel_positions[tag_id]
-                    for tag_id in detected_pixel_positions if tag_id <= 3
-                }
-
-                pixel_positions_robots = {
-                    tag_id: pixel_positions[tag_id]
-                    for tag_id in pixel_positions if tag_id > 3
-                }
-
-                pixel_positions = {**pixel_positions_corners, **pixel_positions_robots}
-                detected_corner_positions = locked_corners.copy()
-
-            elif not lock_state:
-                locked_corners = detected_corner_positions.copy() if detected_corner_positions else None
-                detected_pixel_positions = pixel_positions.copy()
+            # If locked, work with locked corners
+            if lock_state and locked_corners:
+                # We use locked world coordinates for all available corners
+                combined_corners = locked_corners.copy()
+                
+                # For pixel positions, use the currently visible corners and 
+                # supplement with stored positions for invisible corners
+                combined_pixels = {}
+                
+                # First, add all currently visible corners
+                for tag_id in pixel_positions:
+                    if int(tag_id) <= 3:
+                        combined_pixels[int(tag_id)] = pixel_positions[tag_id]
+                
+                # Then, for any locked corner that's not currently visible,
+                # add its stored pixel position if we have one
+                if locked_pixel_positions:
+                    for tag_id in locked_corners:
+                        tag_id = int(tag_id)
+                        if tag_id <= 3 and tag_id not in combined_pixels and tag_id in locked_pixel_positions:
+                            combined_pixels[tag_id] = locked_pixel_positions[tag_id]
+                            # Mark this as a "ghost" corner in the frame for visualization
+                            center_int = tuple(locked_pixel_positions[tag_id].astype(int))
+                            cv2.circle(frame, center_int, 8, (0, 0, 255), 2)  # Red circle for ghost corners
+                            cv2.putText(frame, f"ID: {tag_id} (locked)", 
+                                      (center_int[0] + 10, center_int[1] - 10), 
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                
+                # Add all robot markers
+                for tag_id in pixel_positions:
+                    if int(tag_id) > 3:
+                        combined_pixels[int(tag_id)] = pixel_positions[tag_id]
+                
+                # Use the combined information
+                detected_corner_positions = combined_corners
+                pixel_positions = combined_pixels
             
+            elif not lock_state:
+                # When not locked, just use what we see
+                # But save current state in case we lock soon
+                if detected_corner_positions:
+                    locked_corners = detected_corner_positions.copy() 
+                if pixel_positions:
+                    locked_pixel_positions = {int(k): v.copy() for k, v in pixel_positions.items() if int(k) <= 3}
+            
+            # Only proceed if we have enough corners for coordinate transformation
             if len(detected_corner_positions) >= 3:
+                # Prepare source and destination points for transformation
                 src_points = []
                 dst_points = []
+                available_corners = 0
 
                 for tag_id, world_pos in detected_corner_positions.items():
+                    tag_id = int(tag_id)
+                    # Skip if tag is not in pixel_positions
+                    if tag_id not in pixel_positions:
+                        continue
+                    
                     src_points.append(pixel_positions[tag_id])
                     dst_points.append(world_pos)
+                    available_corners += 1
 
-                src_points = np.array(src_points, dtype=np.float32)
-                dst_points = np.array(dst_points, dtype=np.float32)
-
-                if len(detected_corner_positions) == 3:
-                    H = cv2.getAffineTransform(src_points[:3], dst_points[:3])
-                else:
-                    H, _ = cv2.findHomography(src_points, dst_points)
-
-                for tag_id, pixel_pos in pixel_positions.items():
-                    if tag_id > 3:
-                        pixel_tag = np.array([pixel_pos], dtype=np.float32)
-
-                        if len(detected_corner_positions) == 3:
-                            world_tag = cv2.transform(pixel_tag[None, :, :], H)
-                            estimated_position = world_tag[0, 0]
+                # Only proceed if we have enough corners
+                if available_corners >= 3:
+                    src_points = np.array(src_points, dtype=np.float32)
+                    dst_points = np.array(dst_points, dtype=np.float32)
+                    
+                    # Choose appropriate transformation method based on available corners
+                    try:
+                        if available_corners >= 4:
+                            # Use homography for 4+ corners
+                            H, status = cv2.findHomography(src_points, dst_points)
+                            transform_type = "homography"
                         else:
-                            pixel_tag_homogeneous = np.array([pixel_pos[0], pixel_pos[1], 1])
-                            world_tag_homogeneous = np.dot(H, pixel_tag_homogeneous)
-                            world_tag_homogeneous /= world_tag_homogeneous[2]
-                            estimated_position = world_tag_homogeneous[:2]
+                            # Use affine transform for exactly 3 corners
+                            H = cv2.getAffineTransform(src_points[:3], dst_points[:3])
+                            transform_type = "affine"
+                        
+                        # Calculate position for all robot tags
+                        for tag_id, pixel_pos in pixel_positions.items():
+                            if int(tag_id) > 3:  # Only process robot tags
+                                tag_id = int(tag_id)
+                                pixel_tag = np.array([pixel_pos], dtype=np.float32)
+                                
+                                try:
+                                    if transform_type == "affine":
+                                        # For affine transform, use transform directly
+                                        world_tag = cv2.transform(pixel_tag[None, :, :], H)
+                                        estimated_position = world_tag[0, 0]
+                                    else:  # homography
+                                        # For homography, use homogeneous coordinates
+                                        pixel_tag_homogeneous = np.array([pixel_pos[0], pixel_pos[1], 1])
+                                        world_tag_homogeneous = np.dot(H, pixel_tag_homogeneous)
+                                        # Protect against division by zero
+                                        if abs(world_tag_homogeneous[2]) > 1e-10:
+                                            world_tag_homogeneous /= world_tag_homogeneous[2]
+                                            estimated_position = world_tag_homogeneous[:2]
+                                        else:
+                                            # If division is unsafe, fall back to affine transform
+                                            H_affine = cv2.getAffineTransform(src_points[:3], dst_points[:3])
+                                            world_tag = cv2.transform(pixel_tag[None, :, :], H_affine)
+                                            estimated_position = world_tag[0, 0]
+                                    
+                                    estimated_robot_positions[tag_id] = np.round(estimated_position)
+                                except Exception as e:
+                                    print(f"⚠️ Error calculating position for tag {tag_id}: {e}")
+                    except Exception as e:
+                        print(f"⚠️ Error computing transformation: {e}")
 
-                        estimated_robot_positions[tag_id] = np.round(estimated_position)
+        # Encode frame as JPEG and convert to base64
+        _, buffer = cv2.imencode(".jpg", frame)
+        base64_frame = base64.b64encode(buffer).decode("utf-8")
 
-            # Encode frame as JPEG and convert to base64
-            _, buffer = cv2.imencode(".jpg", frame)
-            base64_frame = base64.b64encode(buffer).decode("utf-8")
+        # Add additional information about lock state
+        output_dict = {
+            'robot_tags': {int(tag_id): estimated_robot_positions[tag_id].tolist() for tag_id in estimated_robot_positions},
+            'corner_tags': {int(tag_id): detected_corner_positions[tag_id].tolist() for tag_id in detected_corner_positions},
+            'fps': round(fps, 2),
+            'frame': base64_frame,
+            'lock_state': lock_state,
+            'available_corners': available_corners if 'available_corners' in locals() else 0
+        }
 
-            output_dict = {
-                'robot_tags': {int(tag_id): estimated_robot_positions[tag_id].tolist() for tag_id in estimated_robot_positions},
-                'corner_tags': {int(tag_id): detected_corner_positions[tag_id].tolist() for tag_id in detected_corner_positions},
-                'fps': round(fps, 2),
-                "frame": base64_frame
-            }
-
-            # cv2.imshow("ArUco Tracker", frame)
-
-            await asyncio.sleep(0.01)  # Helps prevent locking up the event loop
-            yield output_dict
+        await asyncio.sleep(0.01)  # Helps prevent locking up the event loop
+        yield output_dict
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break

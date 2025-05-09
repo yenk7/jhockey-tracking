@@ -25,7 +25,7 @@ def find_serial_port_by_hwid(target_hwid_substring):
     # First try to find by HWID or description that contains target substring
     for port in ports:
         if (target_hwid_substring in port.hwid) or (target_hwid_substring in port.description):
-            print(f"Found XBee device on port: {port.device} (matched by HWID or description)")
+            print(f"Found XBee device on port: {port.device} (matched by HWID)")
             return port.device
     
     # On Mac, also check by common USB-serial adapter descriptors
@@ -111,7 +111,8 @@ async def receive_data(device):
                         try:
                             # Send the payload using the XBee device.
                             device.send_data_broadcast(payload)
-                            print(f"Sent: {payload}", end="\r")
+                            # Use a cleaner print approach that clears the line properly
+                            print(f"Sent: {payload}".ljust(80), end="\r", flush=True)
                             last_send_time = current_time
                         except Exception as e:
                             print(f"\nError sending data via XBee: {e}")
