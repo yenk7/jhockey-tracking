@@ -25,6 +25,18 @@ def load_calibration_parameters(filename="best_aruco_params.json"):
         print(f"⚠️ Error loading parameters: {e}")
         return None
 
+def crop_frame(frame, x=300, y=110, w=1350, h=690):
+    """
+    Crop the given frame to the specified region.
+    :param frame: The input frame to crop.
+    :param x: The x-coordinate of the top-left corner of the crop region.
+    :param y: The y-coordinate of the top-left corner of the crop region.
+    :param w: The width of the crop region.
+    :param h: The height of the crop region.
+    :return: The cropped frame.
+    """
+    return frame[y:y+h, x:x+w]
+
 async def track_aruco_tags(lock_queue, scale_factor=0.7):
     
     global locked_corners, locked_pixel_positions, lock_state
@@ -109,6 +121,9 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7):
             await asyncio.sleep(0.1)
             continue
 
+        # Apply cropping
+        frame = crop_frame(frame)
+
         frame = cv2.rotate(frame, cv2.ROTATE_180)
 
         curr_time = time.time()
@@ -118,7 +133,27 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7):
         small_frame = cv2.resize(frame, (0, 0), fx=scale_factor, fy=scale_factor)
         gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
 
-        corners, ids, _ = detector.detectMarkers(gray)
+        # Debug: Save or display the grayscale image
+        cv2.imwrite("debug_gray_image.jpg", gray)
+
+        # Ensure the grayscale image has enough contours
+        if gray is None or gray.size == 0:
+            print("⚠️ Grayscale image is empty or invalid")
+            await asyncio.sleep(0.1)
+            continue
+
+        # Adjust detector parameters if needed
+        detector_params.adaptiveThreshWinSizeMin = max(3, detector_params.adaptiveThreshWinSizeMin)
+        detector_params.adaptiveThreshWinSizeMax = max(23, detector_params.adaptiveThreshWinSizeMax)
+        detector_params.minMarkerPerimeterRate = max(0.03, detector_params.minMarkerPerimeterRate)
+        detector_params.maxMarkerPerimeterRate = min(4.0, detector_params.maxMarkerPerimeterRate)
+
+        try:
+            corners, ids, _ = detector.detectMarkers(gray)
+        except cv2.error as e:
+            print(f"⚠️ OpenCV error during detectMarkers: {e}")
+            await asyncio.sleep(0.1)
+            continue
 
         detected_corner_positions = {}  # For new corners
         pixel_positions = {}  # Stores pixel positions of all markers

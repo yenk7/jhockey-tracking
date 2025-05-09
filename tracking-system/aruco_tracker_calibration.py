@@ -51,6 +51,18 @@ auto_param_ranges = {
     'cornerRefinementMethod': [0, 1, 2],  # 0-None, 1-Subpix, 2-Contour
 }
 
+def crop_frame(frame, x=300, y=110, w=1350, h=690):
+    """
+    Crop the given frame to the specified region.
+    :param frame: The input frame to crop.
+    :param x: The x-coordinate of the top-left corner of the crop region.
+    :param y: The y-coordinate of the top-left corner of the crop region.
+    :param w: The width of the crop region.
+    :param h: The height of the crop region.
+    :return: The cropped frame.
+    """
+    return frame[y:y+h, x:x+w]
+
 def create_window_and_trackbars():
     """Create a window with trackbars for each parameter"""
     global param_values
@@ -258,12 +270,14 @@ def run_calibration(scale_factor=0.7, load_previous=True):
         if not ret:
             print("Failed to grab frame")
             break
-            
+
         # Calculate FPS
         current_time = time.time()
         fps = 1.0 / (current_time - prev_time)
         prev_time = current_time
-        
+        # Apply cropping
+        frame = crop_frame(frame)
+
         # Resize for better performance 
         small_frame = cv2.resize(frame, (0, 0), fx=scale_factor, fy=scale_factor)
         gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
@@ -379,6 +393,18 @@ def run_calibration(scale_factor=0.7, load_previous=True):
                 'maxErroneousBitsInBorderRate': 60,
                 'minOtsuStdDev': 500,
             }
+            # Update trackbars to reflect reset values
+            for param, value in param_values.items():
+                if param in ['minMarkerPerimeterRate', 'maxMarkerPerimeterRate', 
+                           'polygonalApproxAccuracyRate', 'minCornerDistanceRate',
+                           'minMarkerDistanceRate', 'cornerRefinementMinAccuracy']:
+                    value = int(value * 100)
+                cv2.setTrackbarPos(param, "ArUco Calibration", value)
+
+        elif key == ord('a'):
+            # Toggle auto-tuning mode
+            auto_tuning_active = not auto_tuning_active
+            print(f"Auto-tuning mode {'enabled' if auto_tuning_active else 'disabled'}")
         
     # Save best parameters before exiting
     if best_params is not None:
@@ -446,10 +472,10 @@ def run_auto_calibration(scale_factor=0.7, num_frames=20, max_combinations=50) -
         if not ret:
             print("⚠️ Failed to grab frame")
             continue
-        
-        # Optional: rotate frame if needed
-        # frame = cv2.rotate(frame, cv2.ROTATE_180)
-        
+
+        # Apply cropping
+        frame = crop_frame(frame)
+
         frames.append(frame)
         time.sleep(0.1)  # Short delay to get varied frames
         
