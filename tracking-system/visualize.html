@@ -53,10 +53,15 @@
         display: flex;
         justify-content: center;
         align-items: center;
-        font-size: 40px;
+        font-size: 36px;
         font-weight: bold;
         color: white;
         font-family: Arial, sans-serif;
+        border-radius: 8px;
+        border: 3px solid #8B0000;
+        box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+        transition: all 0.3s ease;
       }
       #corner-0 {
         top: -30px;
@@ -162,6 +167,64 @@
         left: 0;
         padding: 10px;
       }
+      
+      /* Video overlay styles */
+      .video-wrapper {
+        position: relative;
+        display: inline-block;
+        width: 100%;
+      }
+      
+      .video-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 10;
+      }
+      
+      .video-corner-marker {
+        position: absolute;
+        width: 40px;
+        height: 40px;
+        background-color: red;
+        color: white;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: 18px;
+        font-weight: bold;
+        border-radius: 50%;
+        border: 2px solid white;
+        box-shadow: 0 0 8px rgba(0, 0, 0, 0.7);
+        text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+        transition: all 0.3s ease;
+        opacity: 0;
+        transform: translate(-50%, -50%);
+      }
+      
+      .video-corner-marker.detected {
+        background-color: #00ff00;
+        border-color: #006400;
+        box-shadow: 0 0 12px rgba(0, 255, 0, 0.8);
+        opacity: 1;
+        animation: pulse 2s infinite;
+      }
+      
+      .video-corner-marker.not-detected {
+        background-color: #ff0000;
+        border-color: #8B0000;
+        box-shadow: 0 0 12px rgba(255, 0, 0, 0.8);
+        opacity: 0.8;
+      }
+      
+      @keyframes pulse {
+        0% { transform: translate(-50%, -50%) scale(1); }
+        50% { transform: translate(-50%, -50%) scale(1.1); }
+        100% { transform: translate(-50%, -50%) scale(1); }
+      }
     </style>
   </head>
   <body>
@@ -200,16 +263,27 @@
 
       <button id="lock-btn" onclick="toggleLock()">Lock Corners</button>
       <div class="video-container">
-        <img
-          id="video-stream"
-          src=""
-          alt="Video Stream"
-          style="width: 100%; border: 2px solid black"
-        />
+        <div class="video-wrapper">
+          <img
+            id="video-stream"
+            src=""
+            alt="Video Stream"
+            style="width: 100%; border: 2px solid black; display: block;"
+          />
+          <div class="video-overlay">
+            <div id="video-corner-0" class="video-corner-marker">0</div>
+            <div id="video-corner-1" class="video-corner-marker">1</div>
+            <div id="video-corner-2" class="video-corner-marker">2</div>
+            <div id="video-corner-3" class="video-corner-marker">3</div>
+          </div>
+        </div>
       </div>
 
 
       <div id="fps-info" class="fps-display">FPS: N/A</div>
+      <div id="resolution-info" class="fps-display">Resolution: N/A</div>
+      <div id="stream-info" class="fps-display" style="font-size: 18px;">Stream: N/A</div>
+      <div id="threshold-info" class="fps-display" style="font-size: 16px;">Stability: N/A</div>
     </div>
 
     <script>
@@ -247,10 +321,33 @@
         }
       }
 
+
+
+      // Add event listener for video load to ensure proper overlay positioning
+      document.getElementById("video-stream").addEventListener('load', function() {
+        // Trigger a resize check after video loads
+        setTimeout(() => {
+          const event = new Event('resize');
+          window.dispatchEvent(event);
+        }, 100);
+      });
+
+      // Add window resize listener to reposition overlay markers
+      window.addEventListener('resize', function() {
+        // Re-trigger overlay update if we have current data
+        if (window.lastOutputDict) {
+          updateVideoOverlay(window.lastOutputDict);
+        }
+      });
+
+      // Store last output for resize events
+      let lastOutputDict = null;
+      
       socket.onmessage = function (event) {
         const message = JSON.parse(event.data);
         if (message.type === "tracking_data") {
           const outputDict = message.data;
+          window.lastOutputDict = outputDict; // Store for resize events
           updateVisualization(outputDict);
           if (outputDict.frame) {
             document.getElementById("video-stream").src =
@@ -298,15 +395,29 @@
 
           const { xPixel, yPixel } = mapToPixel(x, y, xMin, xMax, yMin, yMax, containerWidth, containerHeight);
 
-
           cornerElement.style.left = `${xPixel - 40}px`; // Centering (80px width)
           cornerElement.style.top = `${yPixel - 40}px`; // Centering (80px height)
 
-          cornerElement.style.backgroundColor = detectedCorners.hasOwnProperty(
-            i
-          )
-            ? "green"
-            : "red";
+          // Enhanced corner visualization with better number display
+          if (detectedCorners.hasOwnProperty(i)) {
+            cornerElement.style.backgroundColor = "green";
+            cornerElement.style.border = "3px solid #006400";
+            cornerElement.style.boxShadow = "0 0 10px rgba(0, 255, 0, 0.5)";
+            cornerElement.textContent = `${i}`;
+            cornerElement.style.color = "white";
+            cornerElement.style.fontSize = "36px";
+            cornerElement.style.fontWeight = "bold";
+            cornerElement.style.textShadow = "2px 2px 4px rgba(0,0,0,0.8)";
+          } else {
+            cornerElement.style.backgroundColor = "red";
+            cornerElement.style.border = "3px solid #8B0000";
+            cornerElement.style.boxShadow = "0 0 10px rgba(255, 0, 0, 0.5)";
+            cornerElement.textContent = `${i}`;
+            cornerElement.style.color = "white";
+            cornerElement.style.fontSize = "36px";
+            cornerElement.style.fontWeight = "bold";
+            cornerElement.style.textShadow = "2px 2px 4px rgba(0,0,0,0.8)";
+          }
         }
 
         for (const id in detectedRobots) {
@@ -375,6 +486,68 @@
         document.getElementById("fps-info").textContent = `${Math.round(
           fps
         )} FPS`;
+        
+        // Update resolution and stream info if available
+        if (outputDict.resolution) {
+          document.getElementById("resolution-info").textContent = `${outputDict.resolution}`;
+        }
+        if (outputDict.stream_size) {
+          document.getElementById("stream-info").textContent = `Stream: ${outputDict.stream_size}`;
+        }
+        if (outputDict.movement_threshold) {
+          document.getElementById("threshold-info").textContent = `Stability: ${outputDict.movement_threshold}`;
+        }
+        
+        // Update video overlay corners
+        updateVideoOverlay(outputDict);
+      }
+
+      function updateVideoOverlay(outputDict) {
+        const detectedCorners = outputDict.corner_tags;
+        const videoElement = document.getElementById("video-stream");
+        
+        if (!videoElement || !videoElement.offsetWidth || !videoElement.offsetHeight) {
+          return; // Video not loaded yet
+        }
+        
+        // Get video dimensions and position
+        const videoRect = videoElement.getBoundingClientRect();
+        const videoWidth = videoElement.offsetWidth;
+        const videoHeight = videoElement.offsetHeight;
+        
+        // Define corner positions in the video coordinate system
+        // These should match the actual physical corner positions in the camera view
+        const videoCornerPositions = {
+          0: { x: 0.15, y: 0.85 },    // Bottom-left in video (15% from left, 85% from top)
+          1: { x: 0.15, y: 0.15 },    // Top-left in video (15% from left, 15% from top)
+          2: { x: 0.85, y: 0.15 },    // Top-right in video (85% from left, 15% from top)
+          3: { x: 0.85, y: 0.85 }     // Bottom-right in video (85% from left, 85% from top)
+        };
+        
+        // Update each corner marker
+        for (let i = 0; i <= 3; i++) {
+          const cornerMarker = document.getElementById(`video-corner-${i}`);
+          if (!cornerMarker) continue;
+          
+          const pos = videoCornerPositions[i];
+          const xPos = pos.x * videoWidth;
+          const yPos = pos.y * videoHeight;
+          
+          // Position the marker
+          cornerMarker.style.left = `${xPos}px`;
+          cornerMarker.style.top = `${yPos}px`;
+          
+          // Update appearance based on detection
+          if (detectedCorners.hasOwnProperty(i)) {
+            cornerMarker.classList.remove('not-detected');
+            cornerMarker.classList.add('detected');
+            cornerMarker.style.opacity = '1';
+          } else {
+            cornerMarker.classList.remove('detected');
+            cornerMarker.classList.add('not-detected');
+            cornerMarker.style.opacity = '0.8';
+          }
+        }
       }
 
       function startTimer() {

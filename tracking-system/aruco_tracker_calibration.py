@@ -6,6 +6,7 @@ import os
 import json
 import itertools
 import concurrent.futures
+from collections import deque
 from typing import Dict, List, Tuple, Optional, Any
 
 # Global variables for trackbars
@@ -51,16 +52,52 @@ auto_param_ranges = {
     'cornerRefinementMethod': [0, 1, 2],  # 0-None, 1-Subpix, 2-Contour
 }
 
-def crop_frame(frame, x=300, y=110, w=1350, h=690):
+# Resolution settings for calibration (same as aruco_tracker_2.py)
+RESOLUTION_CONFIGS = {
+    '4k': {
+        'width': 3840,
+        'height': 2160,
+        'crop': {
+            'x': 500,
+            'y': 400,
+            'w': 3840,
+            'h': 2160
+        },
+        'display_name': '4K (3840x2160)'
+    },
+    '1080p': {
+        'width': 1920,
+        'height': 1080,
+        'crop': {
+            'x': 250,
+            'y': 200,
+            'w': 1920,
+            'h': 1080
+        },
+        'display_name': 'Full HD (1920x1080)'
+    }
+}
+
+def crop_frame(frame, resolution='4k'):
     """
-    Crop the given frame to the specified region.
+    Crop the given frame using resolution-specific crop settings.
     :param frame: The input frame to crop.
-    :param x: The x-coordinate of the top-left corner of the crop region.
-    :param y: The y-coordinate of the top-left corner of the crop region.
-    :param w: The width of the crop region.
-    :param h: The height of the crop region.
+    :param resolution: Resolution configuration key ('4k' or '1080p').
     :return: The cropped frame.
     """
+    if resolution not in RESOLUTION_CONFIGS:
+        resolution = '4k'
+    
+    config = RESOLUTION_CONFIGS[resolution]
+    crop = config['crop']
+    
+    # Ensure crop doesn't exceed frame boundaries
+    frame_h, frame_w = frame.shape[:2]
+    x = min(crop['x'], frame_w - 1)
+    y = min(crop['y'], frame_h - 1)
+    w = min(crop['w'], frame_w - x)
+    h = min(crop['h'], frame_h - y)
+    
     return frame[y:y+h, x:x+w]
 
 def create_window_and_trackbars():
@@ -219,9 +256,17 @@ def load_parameters(filename="best_aruco_params.json"):
         print(f"⚠️ Error loading parameters: {e}")
         return False
 
-def run_calibration(scale_factor=0.7, load_previous=True):
+def run_calibration(scale_factor=0.7, resolution='4k', load_previous=True):
     """Run the calibration process"""
     global detection_history, best_params, best_detection_count, frame_count, detection_count, param_values, param_change_count
+    
+    # Get resolution configuration
+    if resolution not in RESOLUTION_CONFIGS:
+        print(f"⚠️ Unknown resolution '{resolution}', defaulting to 4k")
+        resolution = '4k'
+    
+    config = RESOLUTION_CONFIGS[resolution]
+    print(f"📹 Calibrating for {config['display_name']} resolution")
     
     # Try to load previous best parameters if requested
     if load_previous:
@@ -236,14 +281,14 @@ def run_calibration(scale_factor=0.7, load_previous=True):
     # Open camera
     cap = cv2.VideoCapture(0)
     
-    # Try to set HD resolution
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    # Set resolution based on configuration
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, config['width'])
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config['height'])
     
     # Get actual resolution
     actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     actual_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    print(f"Camera resolution: {actual_width}x{actual_height}")
+    print(f"📹 Camera resolution: {actual_width}x{actual_height}")
     
     # Create window and trackbars
     create_window_and_trackbars()
@@ -275,8 +320,8 @@ def run_calibration(scale_factor=0.7, load_previous=True):
         current_time = time.time()
         fps = 1.0 / (current_time - prev_time)
         prev_time = current_time
-        # Apply cropping
-        frame = crop_frame(frame)
+        # Apply cropping with resolution-specific settings
+        frame = crop_frame(frame, resolution)
 
         # Resize for better performance 
         small_frame = cv2.resize(frame, (0, 0), fx=scale_factor, fy=scale_factor)
@@ -442,12 +487,20 @@ def evaluate_parameters(params: Dict[str, Any], frames: List[np.ndarray], dictio
     
     return detection_rate, total_marker_count
 
-def run_auto_calibration(scale_factor=0.7, num_frames=20, max_combinations=50) -> Dict[str, Any]:
+def run_auto_calibration(scale_factor=0.7, num_frames=20, max_combinations=50, resolution='4k') -> Dict[str, Any]:
     """
     Run automated calibration to find the best ArUco detection parameters
     Returns the best parameter set
     """
     print("🔍 Starting automated ArUco calibration process...")
+    
+    # Get resolution configuration
+    if resolution not in RESOLUTION_CONFIGS:
+        print(f"⚠️ Unknown resolution '{resolution}', defaulting to 4k")
+        resolution = '4k'
+    
+    config = RESOLUTION_CONFIGS[resolution]
+    print(f"📹 Calibrating for {config['display_name']} resolution")
     
     # Initialize detector with default parameters
     dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
@@ -455,9 +508,9 @@ def run_auto_calibration(scale_factor=0.7, num_frames=20, max_combinations=50) -
     # Open camera
     cap = cv2.VideoCapture(0)
     
-    # Try to set HD resolution
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    # Set resolution based on configuration
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, config['width'])
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config['height'])
     
     # Get actual resolution
     actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
@@ -473,8 +526,8 @@ def run_auto_calibration(scale_factor=0.7, num_frames=20, max_combinations=50) -
             print("⚠️ Failed to grab frame")
             continue
 
-        # Apply cropping
-        frame = crop_frame(frame)
+        # Apply cropping with resolution-specific settings
+        frame = crop_frame(frame, resolution)
 
         frames.append(frame)
         time.sleep(0.1)  # Short delay to get varied frames
@@ -563,6 +616,250 @@ def run_auto_calibration(scale_factor=0.7, num_frames=20, max_combinations=50) -
         print("⚠️ No good parameters found!")
         return {}
 
+def run_live_adaptive_calibration(scale_factor=0.7, resolution='4k', target_detection_rate=100, max_duration=300):
+    """
+    Run live adaptive calibration that dynamically adjusts parameters until target detection rate is achieved
+    
+    Args:
+        scale_factor: Processing scale factor
+        resolution: Camera resolution ('4k' or '1080p')  
+        target_detection_rate: Target detection rate percentage (default: 100%)
+        max_duration: Maximum calibration time in seconds (default: 300s = 5 minutes)
+    
+    Returns:
+        Best parameter set that achieved the target or closest to it
+    """
+    print(f"🔍 Starting LIVE ADAPTIVE calibration targeting {target_detection_rate}% detection rate...")
+    
+    # Get resolution configuration
+    if resolution not in RESOLUTION_CONFIGS:
+        print(f"⚠️ Unknown resolution '{resolution}', defaulting to 4k")
+        resolution = '4k'
+    
+    config = RESOLUTION_CONFIGS[resolution]
+    print(f"📹 Calibrating for {config['display_name']} resolution")
+    
+    # Initialize detector with default parameters
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
+    
+    # Open camera
+    cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, config['width'])
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config['height'])
+    
+    # Get actual resolution
+    actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    actual_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    print(f"📹 Camera resolution: {actual_width}x{actual_height}")
+    
+    # Define progressive parameter adjustment strategies
+    adjustment_strategies = [
+        {
+            'name': 'Conservative Detection',
+            'params': {
+                'adaptiveThreshWinSizeMin': 5,
+                'adaptiveThreshWinSizeMax': 23,
+                'adaptiveThreshConstant': 7,
+                'minMarkerPerimeterRate': 0.04,
+                'maxMarkerPerimeterRate': 3.0,
+                'cornerRefinementMethod': 1,  # Subpixel
+                'polygonalApproxAccuracyRate': 0.03,
+                'minCornerDistanceRate': 0.05,
+                'errorCorrectionRate': 0.6
+            }
+        },
+        {
+            'name': 'High Sensitivity',
+            'params': {
+                'adaptiveThreshWinSizeMin': 3,
+                'adaptiveThreshWinSizeMax': 45,
+                'adaptiveThreshConstant': 9,
+                'minMarkerPerimeterRate': 0.02,
+                'maxMarkerPerimeterRate': 5.0,
+                'cornerRefinementMethod': 2,  # Contour
+                'polygonalApproxAccuracyRate': 0.05,
+                'minCornerDistanceRate': 0.03,
+                'errorCorrectionRate': 0.8
+            }
+        },
+        {
+            'name': 'Ultra High Sensitivity',
+            'params': {
+                'adaptiveThreshWinSizeMin': 3,
+                'adaptiveThreshWinSizeMax': 50,
+                'adaptiveThreshConstant': 11,
+                'minMarkerPerimeterRate': 0.01,
+                'maxMarkerPerimeterRate': 6.0,
+                'cornerRefinementMethod': 2,
+                'polygonalApproxAccuracyRate': 0.07,
+                'minCornerDistanceRate': 0.02,
+                'errorCorrectionRate': 0.9
+            }
+        },
+        {
+            'name': 'Lighting Adaptive',
+            'params': {
+                'adaptiveThreshWinSizeMin': 7,
+                'adaptiveThreshWinSizeMax': 35,
+                'adaptiveThreshConstant': 5,
+                'minMarkerPerimeterRate': 0.025,
+                'maxMarkerPerimeterRate': 4.5,
+                'cornerRefinementMethod': 1,
+                'polygonalApproxAccuracyRate': 0.02,
+                'minCornerDistanceRate': 0.04,
+                'errorCorrectionRate': 0.7
+            }
+        }
+    ]
+    
+    start_time = time.time()
+    best_params = None
+    best_detection_rate = 0
+    best_marker_count = 0
+    strategy_index = 0
+    frames_tested = 0
+    detection_history = deque(maxlen=50)  # Store last 50 frames of detection results
+    
+    print(f"🎯 Target: {target_detection_rate}% detection rate")
+    print(f"⏱️ Maximum duration: {max_duration} seconds")
+    print(f"🔄 Will try {len(adjustment_strategies)} different strategies")
+    
+    # Create progress window
+    cv2.namedWindow("Live Adaptive Calibration", cv2.WINDOW_AUTOSIZE)
+    
+    while time.time() - start_time < max_duration and strategy_index < len(adjustment_strategies):
+        current_strategy = adjustment_strategies[strategy_index]
+        
+        print(f"\n🧪 Testing Strategy {strategy_index + 1}/{len(adjustment_strategies)}: {current_strategy['name']}")
+        
+        # Apply current strategy parameters
+        detector_params = cv2.aruco.DetectorParameters()
+        detector_params = update_detector_parameters(detector_params, current_strategy['params'])
+        
+        # Required parameters to prevent errors
+        detector_params.markerBorderBits = 1
+        detector_params.minSideLengthCanonicalImg = 16
+        detector_params.perspectiveRemoveIgnoredMarginPerCell = 0.13
+        
+        detector = cv2.aruco.ArucoDetector(dictionary, detector_params)
+        
+        strategy_start_time = time.time()
+        strategy_frames = 0
+        strategy_detections = []
+        
+        # Test current strategy for up to 30 seconds
+        while (time.time() - strategy_start_time < 30 and 
+               time.time() - start_time < max_duration and 
+               len(strategy_detections) < 100):  # Max 100 frames per strategy
+            
+            ret, frame = cap.read()
+            if not ret:
+                continue
+            
+            # Apply cropping with resolution-specific settings
+            frame = crop_frame(frame, resolution)
+            
+            # Resize for processing
+            small_frame = cv2.resize(frame, (0, 0), fx=scale_factor, fy=scale_factor)
+            gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+            
+            # Detect markers
+            corners, ids, rejected = detector.detectMarkers(gray)
+            
+            # Count detections (looking for corner markers 0,1,2,3)
+            corner_detections = 0
+            if ids is not None:
+                for marker_id in ids.flatten():
+                    if 0 <= marker_id <= 3:  # Only count corner markers
+                        corner_detections += 1
+            
+            strategy_detections.append(corner_detections)
+            detection_history.append(corner_detections)
+            
+            # Calculate current detection rates
+            strategy_rate = (sum(1 for d in strategy_detections if d >= 3) / len(strategy_detections)) * 100
+            overall_rate = (sum(1 for d in detection_history if d >= 3) / len(detection_history)) * 100 if detection_history else 0
+            
+            # Draw visualization
+            if corners is not None and ids is not None:
+                # Scale corners back to original frame size
+                corners = [corner / scale_factor for corner in corners]
+                cv2.aruco.drawDetectedMarkers(frame, corners, ids)
+                
+                # Draw centers and IDs
+                for i, corner in enumerate(corners):
+                    center = np.mean(corner[0], axis=0).astype(int)
+                    cv2.circle(frame, tuple(center), 8, (0, 255, 0), -1)
+                    cv2.putText(frame, f"ID: {ids[i][0]}", 
+                              (center[0] + 15, center[1] - 10), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            # Draw status information
+            elapsed_time = time.time() - start_time
+            cv2.putText(frame, f"Strategy: {current_strategy['name']}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+            cv2.putText(frame, f"Current Rate: {strategy_rate:.1f}% ({corner_detections}/4 corners)", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(frame, f"Best Rate: {best_detection_rate:.1f}%", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv2.putText(frame, f"Target: {target_detection_rate}%", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+            cv2.putText(frame, f"Time: {elapsed_time:.1f}s / {max_duration}s", (10, 190), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Progress bar for strategy
+            bar_width = 400
+            bar_progress = min(1.0, len(strategy_detections) / 50.0)
+            cv2.rectangle(frame, (10, 210), (10 + int(bar_width * bar_progress), 230), (0, 255, 0), -1)
+            cv2.rectangle(frame, (10, 210), (10 + bar_width, 230), (255, 255, 255), 2)
+            
+            cv2.imshow("Live Adaptive Calibration", frame)
+            
+            strategy_frames += 1
+            frames_tested += 1
+            
+            # Check if we've achieved target with current strategy
+            if len(strategy_detections) >= 20 and strategy_rate >= target_detection_rate:
+                print(f"🎉 TARGET ACHIEVED! {strategy_rate:.1f}% detection rate with {current_strategy['name']}")
+                best_params = current_strategy['params'].copy()
+                best_detection_rate = strategy_rate
+                break
+            
+            # Update best if this strategy is better
+            if strategy_rate > best_detection_rate:
+                best_detection_rate = strategy_rate
+                best_params = current_strategy['params'].copy()
+                best_marker_count = max(strategy_detections) if strategy_detections else 0
+                print(f"📈 New best: {best_detection_rate:.1f}% with {current_strategy['name']}")
+            
+            # ESC to quit early
+            if cv2.waitKey(1) & 0xFF == 27:
+                print("🛑 Calibration stopped by user")
+                break
+        
+        print(f"✅ Strategy '{current_strategy['name']}' completed: {strategy_rate:.1f}% detection rate over {len(strategy_detections)} frames")
+        
+        # Move to next strategy if target not achieved
+        if best_detection_rate < target_detection_rate:
+            strategy_index += 1
+        else:
+            break
+    
+    # Cleanup
+    cv2.destroyAllWindows()
+    cap.release()
+    
+    # Results
+    total_time = time.time() - start_time
+    if best_params is not None:
+        if best_detection_rate >= target_detection_rate:
+            print(f"🎉 SUCCESS! Achieved {best_detection_rate:.1f}% detection rate in {total_time:.1f}s")
+        else:
+            print(f"📊 PARTIAL SUCCESS: Best achieved {best_detection_rate:.1f}% detection rate in {total_time:.1f}s")
+            print(f"   (Target was {target_detection_rate}%)")
+        
+        print(f"🔧 Best parameters: {best_params}")
+        save_parameters(best_params, "best_aruco_params.json")
+        return best_params
+    else:
+        print(f"❌ No improvement found in {total_time:.1f}s")
+        return {}
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='ArUco tag detection calibration tool')
     parser.add_argument('--no-load', action='store_false', dest='load_previous',
@@ -571,16 +868,27 @@ if __name__ == "__main__":
                         help='Scale factor for processing (default: 0.7)')
     parser.add_argument('--auto', action='store_true',
                         help='Run automated calibration instead of manual')
+    parser.add_argument('--live', action='store_true',
+                        help='Run live adaptive calibration targeting 100% detection')
     parser.add_argument('--frames', type=int, default=20,
                         help='Number of frames to capture for automated calibration (default: 20)')
     parser.add_argument('--max-combinations', type=int, default=50,
                         help='Maximum number of parameter combinations to test (default: 50)')
+    parser.add_argument('--target-rate', type=int, default=100,
+                        help='Target detection rate percentage for live calibration (default: 100)')
+    parser.add_argument('--max-duration', type=int, default=300,
+                        help='Maximum calibration duration in seconds (default: 300)')
+    parser.add_argument('--resolution', choices=['4k', '1080p'], default='4k',
+                        help='Camera resolution for calibration (default: 4k)')
                         
     args = parser.parse_args()
     
-    if args.auto:
+    if args.live:
+        # Run live adaptive calibration
+        run_live_adaptive_calibration(args.scale, args.resolution, args.target_rate, args.max_duration)
+    elif args.auto:
         # Run automated calibration
-        run_auto_calibration(args.scale, args.frames, args.max_combinations)
+        run_auto_calibration(args.scale, args.frames, args.max_combinations, args.resolution)
     else:
         # Run manual calibration
-        run_calibration(args.scale, args.load_previous)
+        run_calibration(args.scale, args.resolution, args.load_previous)

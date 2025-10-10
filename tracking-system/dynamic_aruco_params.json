@@ -1,0 +1,11 @@
+{
+    "adaptiveThreshWinSizeMin": 3,
+    "adaptiveThreshWinSizeMax": 35,
+    "adaptiveThreshConstant": 5,
+    "minMarkerPerimeterRate": 0.02,
+    "maxMarkerPerimeterRate": 4.0,
+    "cornerRefinementMethod": 1,
+    "polygonalApproxAccuracyRate": 0.05,
+    "minCornerDistanceRate": 0.03,
+    "errorCorrectionRate": 0.8
+}

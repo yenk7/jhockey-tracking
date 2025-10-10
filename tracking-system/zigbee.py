@@ -7,7 +7,7 @@ import time
 
 from digi.xbee.devices import XBeeDevice
 
-BAUD_RATE = 115200
+BAUD_RATE = rate_limit = 115200   # Limit to sending at most every rate_limit = 0.05  # Limit to sending at most every rate_limit = 0.05  # Limit to sending at most every 50ms
 # Use a more dynamic approach to find the XBee device on Mac
 TARGET_HWID_SUBSTRING = "FT" # Common substring for FTDI chips used with XBee
 
@@ -91,7 +91,7 @@ async def receive_data(device):
                 
                 last_send_time = time.time()
                 rate_limit = 0.05  # Limit to sending at most every 50ms
-
+                #rate_limit = 0.025  # Limit to sending at most every 25ms
                 while True:
                     message = await websocket.recv()
                     message = json.loads(message)
