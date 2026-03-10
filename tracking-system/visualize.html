@@ -1,619 +1,664 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ArUco Tag Tracker Visualization</title>
-    <style>
-      * {
-        font-family: Arial, sans-serif;
-      }
-      body {
-        display: flex;
-        flex-direction: row;
-        height: 100vh;
-        background-color: #f0f0f0;
-        margin: 0;
-        font-family: Arial, sans-serif;
-      }
-      .left-section {
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        width: 66.66%;
-        border-right: 2px solid black;
-      }
-      .right-section {
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        align-items: center;
-        width: 33.33%;
-        font-size: 24px;
-      }
-      .tracker-container {
-        position: relative;
-        width: 300px;
-        /* max-height: 600px; */
-        /* height: 600px; */
-        border: 2px solid black;
-        margin-bottom: 20px;
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: center;
-        align-items: flex-start;
-        padding-top: 20px;
-      }
-      .corner-tag {
-        width: 80px;
-        height: 80px;
-        position: absolute;
-        background-color: red;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        font-size: 36px;
-        font-weight: bold;
-        color: white;
-        font-family: Arial, sans-serif;
-        border-radius: 8px;
-        border: 3px solid #8B0000;
-        box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
-        transition: all 0.3s ease;
-      }
-      #corner-0 {
-        top: -30px;
-        left: -30px;
-      }
-      #corner-1 {
-        top: -30px;
-        right: -30px;
-      }
-      #corner-2 {
-        bottom: -30px;
-        right: -30px;
-      }
-      #corner-3 {
-        bottom: -30px;
-        left: -30px;
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ArUco Tag Tracker Visualization</title>
+  <style>
+    * {
+      font-family: Arial, sans-serif;
+    }
+
+    body {
+      display: flex;
+      flex-direction: row;
+      height: 100vh;
+      background-color: #f0f0f0;
+      margin: 0;
+      font-family: Arial, sans-serif;
+    }
+
+    .left-section {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      width: 66.66%;
+      border-right: 2px solid black;
+    }
+
+    .right-section {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: center;
+      width: 33.33%;
+      font-size: 24px;
+    }
+
+    .tracker-container {
+      position: relative;
+      width: 300px;
+      /* max-height: 600px; */
+      /* height: 600px; */
+      border: 2px solid black;
+      margin-bottom: 20px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: flex-start;
+      padding-top: 20px;
+    }
+
+    .corner-tag {
+      width: 80px;
+      height: 80px;
+      position: absolute;
+      background-color: red;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 36px;
+      font-weight: bold;
+      color: white;
+      font-family: Arial, sans-serif;
+      border-radius: 8px;
+      border: 3px solid #8B0000;
+      box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+      transition: all 0.3s ease;
+    }
+
+    #corner-0 {
+      top: -30px;
+      left: -30px;
+    }
+
+    #corner-1 {
+      top: -30px;
+      right: -30px;
+    }
+
+    #corner-2 {
+      bottom: -30px;
+      right: -30px;
+    }
+
+    #corner-3 {
+      bottom: -30px;
+      left: -30px;
+    }
+
+    .locked-border {
+      border: 10px solid red !important;
+      width: 60px !important;
+      height: 60px !important;
+    }
+
+    .robot-card {
+      width: 80px;
+      margin: 5px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      color: white;
+    }
+
+    .robot-card .tag {
+      width: 80px;
+      height: 80px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 40px;
+      font-weight: bold;
+    }
+
+    .robot-card .coord-container {
+      background-color: #000000;
+      width: 100%;
+      text-align: center;
+    }
+
+    .robot-card .coord {
+      font-size: 15px;
+      margin: 2px 0;
+    }
+
+    .tag-visible {
+      background-color: green;
+    }
+
+    .tag-inactive {
+      background-color: grey;
+    }
+
+    .controls-container {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 20px;
+      padding: 40px;
+    }
+
+    .timer-display {
+      font-size: 48px;
+      border: 2px solid black;
+      padding: 20px;
+      text-align: center;
+      min-width: 150px;
+      margin-bottom: 10px;
+    }
+
+    .fps-display {
+      font-size: 28px;
+      /* padding: 20px; */
+      text-align: center;
+      min-width: 150px;
+      margin-bottom: 10px;
+    }
+
+    .buttons-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .top-buttons {
+      display: flex;
+      gap: 10px;
+    }
+
+    .timer-buttons {
+      display: flex;
+      gap: 10px;
+    }
+
+    button {
+      font-size: 18px;
+      padding: 10px 20px;
+      cursor: pointer;
+    }
+
+    .title-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      padding: 10px;
+    }
+
+    /* Video overlay styles */
+    .video-wrapper {
+      position: relative;
+      display: inline-block;
+      width: 100%;
+      overflow: hidden;
+    }
+
+    .video-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    .video-corner-marker {
+      position: absolute;
+      width: 40px;
+      height: 40px;
+      background-color: red;
+      color: white;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 18px;
+      font-weight: bold;
+      border-radius: 50%;
+      border: 2px solid white;
+      box-shadow: 0 0 8px rgba(0, 0, 0, 0.7);
+      text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+      transition: all 0.3s ease;
+      opacity: 0;
+      transform: translate(-50%, -50%);
+    }
+
+    .video-corner-marker.detected {
+      background-color: #00ff00;
+      border-color: #006400;
+      box-shadow: 0 0 12px rgba(0, 255, 0, 0.8);
+      opacity: 1;
+      animation: pulse 2s infinite;
+    }
+
+    .video-corner-marker.not-detected {
+      background-color: #ff0000;
+      border-color: #8B0000;
+      box-shadow: 0 0 12px rgba(255, 0, 0, 0.8);
+      opacity: 0.8;
+    }
+
+    @keyframes pulse {
+      0% {
+        transform: translate(-50%, -50%) scale(1);
       }
 
-      .locked-border {
-        border: 10px solid red !important;
-        width: 60px !important;
-        height: 60px !important;
+      50% {
+        transform: translate(-50%, -50%) scale(1.1);
       }
 
-      .robot-card {
-        width: 80px;
-        margin: 5px;
-        text-align: center;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        color: white;
+      100% {
+        transform: translate(-50%, -50%) scale(1);
       }
-      .robot-card .tag {
-        width: 80px;
-        height: 80px;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        font-size: 40px;
-        font-weight: bold;
-      }
-      .robot-card .coord-container {
-        background-color: #000000;
-        width: 100%;
-        text-align: center;
-      }
-      .robot-card .coord {
-        font-size: 15px;
-        margin: 2px 0;
-      }
-      .tag-visible {
-        background-color: green;
-      }
-      .tag-inactive {
-        background-color: grey;
-      }
-      .controls-container {
-        display: flex;
-        flex-direction: row;
-        align-items: center;
-        gap: 20px;
-        padding: 40px;
-      }
-      .timer-display{
-        font-size: 48px;
-        border: 2px solid black;
-        padding: 20px;
-        text-align: center;
-        min-width: 150px;
-        margin-bottom: 10px;
-      }
+    }
+  </style>
+</head>
 
-      .fps-display {
-        font-size: 28px;
-        /* padding: 20px; */
-        text-align: center;
-        min-width: 150px;
-        margin-bottom: 10px;
-      }
-      .buttons-container {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 10px;
-      }
-      .top-buttons {
-        display: flex;
-        gap: 10px;
-      }
-      .timer-buttons {
-        display: flex;
-        gap: 10px;
-      }
-      button {
-        font-size: 18px;
-        padding: 10px 20px;
-        cursor: pointer;
-      }
-      .title-container{
-        position: fixed;
-        top: 0;
-        left: 0;
-        padding: 10px;
-      }
-      
-      /* Video overlay styles */
-      .video-wrapper {
-        position: relative;
-        display: inline-block;
-        width: 100%;
-      }
-      
-      .video-overlay {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        pointer-events: none;
-        z-index: 10;
-      }
-      
-      .video-corner-marker {
-        position: absolute;
-        width: 40px;
-        height: 40px;
-        background-color: red;
-        color: white;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        font-size: 18px;
-        font-weight: bold;
-        border-radius: 50%;
-        border: 2px solid white;
-        box-shadow: 0 0 8px rgba(0, 0, 0, 0.7);
-        text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
-        transition: all 0.3s ease;
-        opacity: 0;
-        transform: translate(-50%, -50%);
-      }
-      
-      .video-corner-marker.detected {
-        background-color: #00ff00;
-        border-color: #006400;
-        box-shadow: 0 0 12px rgba(0, 255, 0, 0.8);
-        opacity: 1;
-        animation: pulse 2s infinite;
-      }
-      
-      .video-corner-marker.not-detected {
-        background-color: #ff0000;
-        border-color: #8B0000;
-        box-shadow: 0 0 12px rgba(255, 0, 0, 0.8);
-        opacity: 0.8;
-      }
-      
-      @keyframes pulse {
-        0% { transform: translate(-50%, -50%) scale(1); }
-        50% { transform: translate(-50%, -50%) scale(1.1); }
-        100% { transform: translate(-50%, -50%) scale(1); }
-      }
-    </style>
-  </head>
-  <body>
-    <div class="left-section">
-      <div class="title-container">
-        <h1>Robot Tracking for Mechatronics</h1>
-        <p>For more details and instructions, take a look at <a href="https://github.com/anwaypimpalkar/jhockey-tracking" target="_blank">https://github.com/anwaypimpalkar/jhockey-tracking</a></p>
-      </div>
-      <div class="tracker-container">
-        <div id="corner-0" class="corner-tag">0</div>
-        <div id="corner-1" class="corner-tag">1</div>
-        <div id="corner-2" class="corner-tag">2</div>
-        <div id="corner-3" class="corner-tag">3</div>
-        <div id="robot-cards-container" class="robot-cards"></div>
-      </div>
+<body>
+  <div class="left-section">
+    <div class="title-container">
+      <h1>Robot Tracking for Mechatronics</h1>
+      <p>For more details and instructions, take a look at <a href="https://github.com/anwaypimpalkar/jhockey-tracking"
+          target="_blank">https://github.com/anwaypimpalkar/jhockey-tracking</a></p>
     </div>
-    <div class="right-section">
-      <div class="controls-container">
-        <div id="timer-info" class="timer-display">120s</div>
-        <div class="buttons-container">
-          <div class="top-buttons">
-            <button id="start-btn" onclick="startTimer()">Start</button>
-            <button id="pause-btn" onclick="pauseTimer()" disabled>
-              Pause
-            </button>
-            <button id="reset-btn" onclick="resetTimer()" disabled>
-              Reset
-            </button>
-          </div>
-          <div class="timer-buttons">
-            <button onclick="increaseTimer()">+30s</button>
-            <button onclick="decreaseTimer()">-30s</button>
-          </div>
+    <div class="tracker-container">
+      <div id="corner-0" class="corner-tag">0</div>
+      <div id="corner-1" class="corner-tag">1</div>
+      <div id="corner-2" class="corner-tag">2</div>
+      <div id="corner-3" class="corner-tag">3</div>
+      <div id="robot-cards-container" class="robot-cards"></div>
+    </div>
+  </div>
+  <div class="right-section">
+    <div class="controls-container">
+      <div id="timer-info" class="timer-display">120s</div>
+      <div class="buttons-container">
+        <div class="top-buttons">
+          <button id="start-btn" onclick="startTimer()">Start</button>
+          <button id="pause-btn" onclick="pauseTimer()" disabled>
+            Pause
+          </button>
+          <button id="reset-btn" onclick="resetTimer()" disabled>
+            Reset
+          </button>
+        </div>
+        <div class="timer-buttons">
+          <button onclick="increaseTimer()">+30s</button>
+          <button onclick="decreaseTimer()">-30s</button>
         </div>
       </div>
-
-      <button id="lock-btn" onclick="toggleLock()">Lock Corners</button>
-      <div class="video-container">
-        <div class="video-wrapper">
-          <img
-            id="video-stream"
-            src=""
-            alt="Video Stream"
-            style="width: 100%; border: 2px solid black; display: block;"
-          />
-          <div class="video-overlay">
-            <div id="video-corner-0" class="video-corner-marker">0</div>
-            <div id="video-corner-1" class="video-corner-marker">1</div>
-            <div id="video-corner-2" class="video-corner-marker">2</div>
-            <div id="video-corner-3" class="video-corner-marker">3</div>
-          </div>
-        </div>
-      </div>
-
-
-      <div id="fps-info" class="fps-display">FPS: N/A</div>
-      <div id="resolution-info" class="fps-display">Resolution: N/A</div>
-      <div id="stream-info" class="fps-display" style="font-size: 18px;">Stream: N/A</div>
-      <div id="threshold-info" class="fps-display" style="font-size: 16px;">Stability: N/A</div>
     </div>
 
-    <script>
-      const socket = new WebSocket("ws://localhost:8765");
-      const seenTags = {};
-      let timerValue = 120;
-      let elapsedTime = 0;
-      let timerInterval = null;
-      let timerRunning = false;
-      let matchDict = { match_bit: 0, match_time: 0 };
-      let isLocked = false;
+    <button id="lock-btn" onclick="toggleLock()">Lock Corners</button>
+    <div class="video-container">
+      <div class="video-wrapper">
+        <img id="video-stream" src="" alt="Video Stream"
+          style="width: 100%; border: 2px solid black; display: block; transform: rotate(180deg);" />
+        <div class="video-overlay">
+          <div id="video-corner-0" class="video-corner-marker">3</div>
+          <div id="video-corner-1" class="video-corner-marker">0</div>
+          <div id="video-corner-2" class="video-corner-marker">1</div>
+          <div id="video-corner-3" class="video-corner-marker">2</div>
+        </div>
+      </div>
+    </div>
 
-      function toggleLock() {
-        isLocked = !isLocked;
-        document.getElementById("lock-btn").textContent = isLocked
-          ? "Unlock Corners"
-          : "Lock Corners";
 
-        // 🔹 Add/Remove red border when locked
-        for (let i = 0; i <= 3; i++) {
-          const cornerElement = document.getElementById(`corner-${i}`);
-          if (isLocked) {
-            cornerElement.classList.add("locked-border"); // Add red border
-          } else {
-            cornerElement.classList.remove("locked-border"); // Remove red border
-          }
-        }
+    <div id="fps-info" class="fps-display">FPS: N/A</div>
+    <div id="resolution-info" class="fps-display">Resolution: N/A</div>
+    <div id="stream-info" class="fps-display" style="font-size: 18px;">Stream: N/A</div>
+    <div id="threshold-info" class="fps-display" style="font-size: 16px;">Stability: N/A</div>
+  </div>
 
-        console.log("🔵 Sending lock state:", isLocked);
+  <script>
+    const socket = new WebSocket("ws://localhost:8765");
+    const seenTags = {};
+    let timerValue = 120;
+    let elapsedTime = 0;
+    let timerInterval = null;
+    let timerRunning = false;
+    let matchDict = { match_bit: 0, match_time: 0 };
+    let isLocked = false;
 
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: "lock_state", data: isLocked }));
+    function toggleLock() {
+      isLocked = !isLocked;
+      document.getElementById("lock-btn").textContent = isLocked
+        ? "Unlock Corners"
+        : "Lock Corners";
+
+      // 🔹 Add/Remove red border when locked
+      for (let i = 0; i <= 3; i++) {
+        const cornerElement = document.getElementById(`corner-${i}`);
+        if (isLocked) {
+          cornerElement.classList.add("locked-border"); // Add red border
         } else {
-          console.log("❌ WebSocket not open");
+          cornerElement.classList.remove("locked-border"); // Remove red border
         }
       }
 
+      console.log("🔵 Sending lock state:", isLocked);
+
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "lock_state", data: isLocked }));
+      } else {
+        console.log("❌ WebSocket not open");
+      }
+    }
 
 
-      // Add event listener for video load to ensure proper overlay positioning
-      document.getElementById("video-stream").addEventListener('load', function() {
-        // Trigger a resize check after video loads
-        setTimeout(() => {
-          const event = new Event('resize');
-          window.dispatchEvent(event);
-        }, 100);
-      });
 
-      // Add window resize listener to reposition overlay markers
-      window.addEventListener('resize', function() {
-        // Re-trigger overlay update if we have current data
-        if (window.lastOutputDict) {
-          updateVideoOverlay(window.lastOutputDict);
+    // Add event listener for video load to ensure proper overlay positioning
+    document.getElementById("video-stream").addEventListener('load', function () {
+      // Trigger a resize check after video loads
+      setTimeout(() => {
+        const event = new Event('resize');
+        window.dispatchEvent(event);
+      }, 100);
+    });
+
+    // Add window resize listener to reposition overlay markers
+    window.addEventListener('resize', function () {
+      // Re-trigger overlay update if we have current data
+      if (window.lastOutputDict) {
+        updateVideoOverlay(window.lastOutputDict);
+      }
+    });
+
+    // Store last output for resize events
+    let lastOutputDict = null;
+
+    socket.onmessage = function (event) {
+      const message = JSON.parse(event.data);
+      if (message.type === "tracking_data") {
+        const outputDict = message.data;
+        window.lastOutputDict = outputDict; // Store for resize events
+        updateVisualization(outputDict);
+        if (outputDict.frame) {
+          document.getElementById("video-stream").src =
+            "data:image/jpeg;base64," + outputDict.frame;
         }
-      });
+      }
+    };
 
-      // Store last output for resize events
-      let lastOutputDict = null;
-      
-      socket.onmessage = function (event) {
-        const message = JSON.parse(event.data);
-        if (message.type === "tracking_data") {
-          const outputDict = message.data;
-          window.lastOutputDict = outputDict; // Store for resize events
-          updateVisualization(outputDict);
-          if (outputDict.frame) {
-            document.getElementById("video-stream").src =
-              "data:image/jpeg;base64," + outputDict.frame;
-          }
-        }
+    function mapToPixel(x, y, xMin, xMax, yMin, yMax, containerWidth, containerHeight) {
+      const xPixel = ((x - xMin) / (xMax - xMin)) * containerWidth;
+      const yPixel = ((yMax - y) / (yMax - yMin)) * containerHeight; // Invert Y
+      return { xPixel, yPixel };
+    }
+
+    function updateVisualization(outputDict) {
+      const detectedCorners = outputDict.corner_tags;
+      const detectedRobots = outputDict.robot_tags;
+      const fps = outputDict.fps;
+
+      const xMin = 0 * 30.48; // ft to cm
+      const xMax = 3.74 * 30.48;
+      const yMin = 0 * 30.48;
+      const yMax = 7.75 * 30.48;
+
+      const trackerContainer = document.querySelector(".tracker-container");
+      const aspectRatio = (yMax - yMin) / (xMax - xMin); // height / width
+      const baseWidth = trackerContainer.clientWidth;
+      const newHeight = baseWidth * aspectRatio;
+
+      trackerContainer.style.width = `${baseWidth}px`;
+      trackerContainer.style.height = `${newHeight}px`;
+
+      const cornerTagPositions = {
+        0: [xMin, yMin],
+        1: [xMin, yMax],
+        2: [xMax, yMax],
+        3: [xMax, yMin],
       };
 
-      function mapToPixel(x, y, xMin, xMax, yMin, yMax, containerWidth, containerHeight) {
-        const xPixel = ((x - xMin) / (xMax - xMin)) * containerWidth;
-        const yPixel = ((yMax - y) / (yMax - yMin)) * containerHeight; // Invert Y
-        return { xPixel, yPixel };
-      }
+      for (let i = 0; i <= 3; i++) {
+        const cornerElement = document.getElementById(`corner-${i}`);
+        const [x, y] = cornerTagPositions[i];
+        const containerWidth = trackerContainer.clientWidth;
+        const containerHeight = trackerContainer.clientHeight;
 
-      function updateVisualization(outputDict) {
-        const detectedCorners = outputDict.corner_tags;
-        const detectedRobots = outputDict.robot_tags;
-        const fps = outputDict.fps;
+        const { xPixel, yPixel } = mapToPixel(x, y, xMin, xMax, yMin, yMax, containerWidth, containerHeight);
 
-        const xMin = 0 * 30.48; // ft to cm
-        const xMax = 3.74 * 30.48;
-        const yMin = 0 * 30.48;
-        const yMax = 7.75 * 30.48;
+        cornerElement.style.left = `${xPixel - 40}px`; // Centering (80px width)
+        cornerElement.style.top = `${yPixel - 40}px`; // Centering (80px height)
 
-        const trackerContainer = document.querySelector(".tracker-container");
-        const aspectRatio = (yMax - yMin) / (xMax - xMin); // height / width
-        const baseWidth = trackerContainer.clientWidth;
-        const newHeight = baseWidth * aspectRatio;
-
-        trackerContainer.style.width = `${baseWidth}px`;
-        trackerContainer.style.height = `${newHeight}px`;
-
-        const cornerTagPositions = {
-          0: [xMin, yMin],
-          1: [xMin, yMax],
-          2: [xMax, yMax],
-          3: [xMax, yMin],
-        };
-
-        for (let i = 0; i <= 3; i++) {
-          const cornerElement = document.getElementById(`corner-${i}`);
-          const [x, y] = cornerTagPositions[i];
-          const containerWidth = trackerContainer.clientWidth;
-          const containerHeight = trackerContainer.clientHeight;
-
-          const { xPixel, yPixel } = mapToPixel(x, y, xMin, xMax, yMin, yMax, containerWidth, containerHeight);
-
-          cornerElement.style.left = `${xPixel - 40}px`; // Centering (80px width)
-          cornerElement.style.top = `${yPixel - 40}px`; // Centering (80px height)
-
-          // Enhanced corner visualization with better number display
-          if (detectedCorners.hasOwnProperty(i)) {
-            cornerElement.style.backgroundColor = "green";
-            cornerElement.style.border = "3px solid #006400";
-            cornerElement.style.boxShadow = "0 0 10px rgba(0, 255, 0, 0.5)";
-            cornerElement.textContent = `${i}`;
-            cornerElement.style.color = "white";
-            cornerElement.style.fontSize = "36px";
-            cornerElement.style.fontWeight = "bold";
-            cornerElement.style.textShadow = "2px 2px 4px rgba(0,0,0,0.8)";
-          } else {
-            cornerElement.style.backgroundColor = "red";
-            cornerElement.style.border = "3px solid #8B0000";
-            cornerElement.style.boxShadow = "0 0 10px rgba(255, 0, 0, 0.5)";
-            cornerElement.textContent = `${i}`;
-            cornerElement.style.color = "white";
-            cornerElement.style.fontSize = "36px";
-            cornerElement.style.fontWeight = "bold";
-            cornerElement.style.textShadow = "2px 2px 4px rgba(0,0,0,0.8)";
-          }
-        }
-
-        for (const id in detectedRobots) {
-          seenTags[id] = detectedRobots[id];
-        }
-
-        const robotCardsContainer = document.getElementById(
-          "robot-cards-container"
-        );
-
-        for (const [id, position] of Object.entries(seenTags)) {
-          const existingCard = document.getElementById(`robot-${id}`);
-          const [x, y] = position;
-          
-          const containerWidth = trackerContainer.clientWidth;
-          const containerHeight = trackerContainer.clientHeight;
-
-          const { xPixel, yPixel } = mapToPixel(x, y, xMin, xMax, yMin, yMax, containerWidth, containerHeight);
-
-
-          let card;
-          if (existingCard) {
-            card = existingCard;
-          } else {
-            card = document.createElement("div");
-            card.id = `robot-${id}`;
-            card.className = "robot-card";
-            card.style.position = "absolute";
-
-            const tagDiv = document.createElement("div");
-            tagDiv.className = "tag";
-            tagDiv.textContent = `${String.fromCharCode(65 + (id - 4))}`;
-            card.appendChild(tagDiv);
-
-            const coordDiv = document.createElement("div");
-            coordDiv.className = "coord-container";
-            card.appendChild(coordDiv);
-
-            robotCardsContainer.appendChild(card);
-          }
-
-          // Always update coordinates and position
-          const coordDiv = card.querySelector(".coord-container");
-          if (detectedRobots.hasOwnProperty(id)) {
-            coordDiv.textContent = `(${x.toFixed(0)}, ${y.toFixed(0)})`;
-            card.style.zIndex = "2";
-          } else {
-            coordDiv.textContent = "(-, -)";
-            card.style.zIndex = "1";
-          }
-
-          card.style.left = `${xPixel - 40}px`;
-          card.style.top = `${yPixel - 40}px`;
-
-          card
-            .querySelector(".tag")
-            .classList.toggle("tag-visible", detectedRobots.hasOwnProperty(id));
-          card
-            .querySelector(".tag")
-            .classList.toggle(
-              "tag-inactive",
-              !detectedRobots.hasOwnProperty(id)
-            );
-        }
-
-        document.getElementById("fps-info").textContent = `${Math.round(
-          fps
-        )} FPS`;
-        
-        // Update resolution and stream info if available
-        if (outputDict.resolution) {
-          document.getElementById("resolution-info").textContent = `${outputDict.resolution}`;
-        }
-        if (outputDict.stream_size) {
-          document.getElementById("stream-info").textContent = `Stream: ${outputDict.stream_size}`;
-        }
-        if (outputDict.movement_threshold) {
-          document.getElementById("threshold-info").textContent = `Stability: ${outputDict.movement_threshold}`;
-        }
-        
-        // Update video overlay corners
-        updateVideoOverlay(outputDict);
-      }
-
-      function updateVideoOverlay(outputDict) {
-        const detectedCorners = outputDict.corner_tags;
-        const videoElement = document.getElementById("video-stream");
-        
-        if (!videoElement || !videoElement.offsetWidth || !videoElement.offsetHeight) {
-          return; // Video not loaded yet
-        }
-        
-        // Get video dimensions and position
-        const videoRect = videoElement.getBoundingClientRect();
-        const videoWidth = videoElement.offsetWidth;
-        const videoHeight = videoElement.offsetHeight;
-        
-        // Define corner positions in the video coordinate system
-        // These should match the actual physical corner positions in the camera view
-        const videoCornerPositions = {
-          0: { x: 0.15, y: 0.85 },    // Bottom-left in video (15% from left, 85% from top)
-          1: { x: 0.15, y: 0.15 },    // Top-left in video (15% from left, 15% from top)
-          2: { x: 0.85, y: 0.15 },    // Top-right in video (85% from left, 15% from top)
-          3: { x: 0.85, y: 0.85 }     // Bottom-right in video (85% from left, 85% from top)
-        };
-        
-        // Update each corner marker
-        for (let i = 0; i <= 3; i++) {
-          const cornerMarker = document.getElementById(`video-corner-${i}`);
-          if (!cornerMarker) continue;
-          
-          const pos = videoCornerPositions[i];
-          const xPos = pos.x * videoWidth;
-          const yPos = pos.y * videoHeight;
-          
-          // Position the marker
-          cornerMarker.style.left = `${xPos}px`;
-          cornerMarker.style.top = `${yPos}px`;
-          
-          // Update appearance based on detection
-          if (detectedCorners.hasOwnProperty(i)) {
-            cornerMarker.classList.remove('not-detected');
-            cornerMarker.classList.add('detected');
-            cornerMarker.style.opacity = '1';
-          } else {
-            cornerMarker.classList.remove('detected');
-            cornerMarker.classList.add('not-detected');
-            cornerMarker.style.opacity = '0.8';
-          }
+        // Enhanced corner visualization with better number display
+        if (detectedCorners.hasOwnProperty(i)) {
+          cornerElement.style.backgroundColor = "green";
+          cornerElement.style.border = "3px solid #006400";
+          cornerElement.style.boxShadow = "0 0 10px rgba(0, 255, 0, 0.5)";
+          cornerElement.textContent = `${i}`;
+          cornerElement.style.color = "white";
+          cornerElement.style.fontSize = "36px";
+          cornerElement.style.fontWeight = "bold";
+          cornerElement.style.textShadow = "2px 2px 4px rgba(0,0,0,0.8)";
+        } else {
+          cornerElement.style.backgroundColor = "red";
+          cornerElement.style.border = "3px solid #8B0000";
+          cornerElement.style.boxShadow = "0 0 10px rgba(255, 0, 0, 0.5)";
+          cornerElement.textContent = `${i}`;
+          cornerElement.style.color = "white";
+          cornerElement.style.fontSize = "36px";
+          cornerElement.style.fontWeight = "bold";
+          cornerElement.style.textShadow = "2px 2px 4px rgba(0,0,0,0.8)";
         }
       }
 
-      function startTimer() {
-        if (timerRunning) return;
-        timerRunning = true;
-        matchDict.match_bit = 1;
+      for (const id in detectedRobots) {
+        let [x, y] = detectedRobots[id];
 
-        document.getElementById("start-btn").disabled = true;
-        document.getElementById("pause-btn").disabled = false;
-        document.getElementById("reset-btn").disabled = false;
+        // Debug: Log if robot is out of bounds
+        if (x < xMin || x > xMax || y < yMin || y > yMax) {
+          console.warn(`Robot ${id} out of bounds: (${x.toFixed(1)}, ${y.toFixed(1)}) - clamping to field`);
+        }
 
-        timerInterval = setInterval(() => {
-          if (timerValue > 0) {
-            timerValue--;
-            elapsedTime++;
-            matchDict.match_time = elapsedTime;
-            updateTimerDisplay();
-            sendMatchDict(); // Send match_dict to backend every second
-          } else {
-            clearInterval(timerInterval);
-            timerRunning = false;
-            matchDict.match_bit = 0;
-            sendMatchDict(); // Send final state when timer ends
-            document.getElementById("pause-btn").disabled = true;
-          }
-        }, 1000);
+        // Clamp position to field boundaries so robot is always visible
+        x = Math.max(xMin, Math.min(xMax, x));
+        y = Math.max(yMin, Math.min(yMax, y));
+
+        seenTags[id] = [x, y];
       }
 
-      function pauseTimer() {
-        clearInterval(timerInterval);
-        timerRunning = false;
-        matchDict.match_bit = 0;
-        sendMatchDict(); // Send match_dict when paused
-        document.getElementById("start-btn").disabled = false;
+      const robotCardsContainer = document.getElementById(
+        "robot-cards-container"
+      );
+
+      for (const [id, position] of Object.entries(seenTags)) {
+        const existingCard = document.getElementById(`robot-${id}`);
+        const [x, y] = position;
+
+        const containerWidth = trackerContainer.clientWidth;
+        const containerHeight = trackerContainer.clientHeight;
+
+        const { xPixel, yPixel } = mapToPixel(x, y, xMin, xMax, yMin, yMax, containerWidth, containerHeight);
+
+
+        let card;
+        if (existingCard) {
+          card = existingCard;
+        } else {
+          card = document.createElement("div");
+          card.id = `robot-${id}`;
+          card.className = "robot-card";
+          card.style.position = "absolute";
+
+          const tagDiv = document.createElement("div");
+          tagDiv.className = "tag";
+          tagDiv.textContent = `${String.fromCharCode(65 + (id - 4))}`;
+          card.appendChild(tagDiv);
+
+          const coordDiv = document.createElement("div");
+          coordDiv.className = "coord-container";
+          card.appendChild(coordDiv);
+
+          robotCardsContainer.appendChild(card);
+        }
+
+        // Always update coordinates and position
+        const coordDiv = card.querySelector(".coord-container");
+        if (detectedRobots.hasOwnProperty(id)) {
+          coordDiv.textContent = `(${x.toFixed(0)}, ${y.toFixed(0)})`;
+          card.style.zIndex = "2";
+        } else {
+          coordDiv.textContent = "(-, -)";
+          card.style.zIndex = "1";
+        }
+
+        card.style.left = `${xPixel - 40}px`;
+        card.style.top = `${yPixel - 40}px`;
+
+        card
+          .querySelector(".tag")
+          .classList.toggle("tag-visible", detectedRobots.hasOwnProperty(id));
+        card
+          .querySelector(".tag")
+          .classList.toggle(
+            "tag-inactive",
+            !detectedRobots.hasOwnProperty(id)
+          );
       }
 
-      function resetTimer() {
-        clearInterval(timerInterval);
-        timerRunning = false;
-        timerValue = 120;
-        elapsedTime = 0;
-        matchDict = { match_bit: 0, match_time: 0 };
-        updateTimerDisplay();
-        sendMatchDict(); // Send match_dict when reset
-        document.getElementById("start-btn").disabled = false;
-        document.getElementById("pause-btn").disabled = true;
-        document.getElementById("reset-btn").disabled = true;
+      document.getElementById("fps-info").textContent = `${Math.round(
+        fps
+      )} FPS`;
+
+      // Update resolution and stream info if available
+      if (outputDict.resolution) {
+        document.getElementById("resolution-info").textContent = `${outputDict.resolution}`;
+      }
+      if (outputDict.stream_size) {
+        document.getElementById("stream-info").textContent = `Stream: ${outputDict.stream_size}`;
+      }
+      if (outputDict.movement_threshold) {
+        document.getElementById("threshold-info").textContent = `Stability: ${outputDict.movement_threshold}`;
       }
 
-      function increaseTimer() {
-        timerValue += 30;
-        updateTimerDisplay();
-      }
-      function decreaseTimer() {
-        timerValue = Math.max(0, timerValue - 30);
-        updateTimerDisplay();
-      }
-      function updateTimerDisplay() {
-        document.getElementById("timer-info").textContent = `${timerValue}s`;
+      // Update video overlay corners
+      updateVideoOverlay(outputDict);
+    }
+
+    function updateVideoOverlay(outputDict) {
+      const detectedCorners = outputDict.corner_tags;
+      const videoElement = document.getElementById("video-stream");
+
+      if (!videoElement || !videoElement.offsetWidth || !videoElement.offsetHeight) {
+        return; // Video not loaded yet
       }
 
-      function sendMatchDict() {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: "match_dict", data: matchDict }));
+      // Get video dimensions and position
+      const videoRect = videoElement.getBoundingClientRect();
+      const videoWidth = videoElement.offsetWidth;
+      const videoHeight = videoElement.offsetHeight;
+
+      // Position video overlay markers to visually match the left-side tracker layout:
+      // 0 = bottom-left, 1 = top-left, 2(4) = top-right, 3(0) = bottom-right
+      const videoCornerPositions = {
+        0: { x: 0.15, y: 0.85 },    // 0 → bottom-left (matches left tracker)
+        1: { x: 0.15, y: 0.15 },    // 1 → top-left (matches left tracker)
+        2: { x: 0.85, y: 0.15 },    // 2(4) → top-right (matches left tracker)
+        3: { x: 0.85, y: 0.85 }     // 3(0) → bottom-right (matches left tracker)
+      };
+
+      // The video labels are remapped: index 0→ID 3, 1→0, 2→1, 3→2
+      const elementToCornerId = { 0: 3, 1: 0, 2: 1, 3: 2 };
+
+      // Update each corner marker
+      for (let i = 0; i <= 3; i++) {
+        const cornerMarker = document.getElementById(`video-corner-${i}`);
+        if (!cornerMarker) continue;
+
+        const pos = videoCornerPositions[i];
+        const xPos = pos.x * videoWidth;
+        const yPos = pos.y * videoHeight;
+
+        // Position the marker
+        cornerMarker.style.left = `${xPos}px`;
+        cornerMarker.style.top = `${yPos}px`;
+
+        // Update appearance based on detection of the mapped corner ID
+        const actualCornerId = elementToCornerId[i];
+        if (detectedCorners.hasOwnProperty(actualCornerId)) {
+          cornerMarker.classList.remove('not-detected');
+          cornerMarker.classList.add('detected');
+          cornerMarker.style.opacity = '1';
+        } else {
+          cornerMarker.classList.remove('detected');
+          cornerMarker.classList.add('not-detected');
+          cornerMarker.style.opacity = '0.8';
         }
       }
-    </script>
-  </body>
+    }
+
+    function startTimer() {
+      if (timerRunning) return;
+      timerRunning = true;
+      matchDict.match_bit = 1;
+
+      document.getElementById("start-btn").disabled = true;
+      document.getElementById("pause-btn").disabled = false;
+      document.getElementById("reset-btn").disabled = false;
+
+      timerInterval = setInterval(() => {
+        if (timerValue > 0) {
+          timerValue--;
+          elapsedTime++;
+          matchDict.match_time = elapsedTime;
+          updateTimerDisplay();
+          sendMatchDict(); // Send match_dict to backend every second
+        } else {
+          clearInterval(timerInterval);
+          timerRunning = false;
+          matchDict.match_bit = 0;
+          sendMatchDict(); // Send final state when timer ends
+          document.getElementById("pause-btn").disabled = true;
+        }
+      }, 1000);
+    }
+
+    function pauseTimer() {
+      clearInterval(timerInterval);
+      timerRunning = false;
+      matchDict.match_bit = 0;
+      sendMatchDict(); // Send match_dict when paused
+      document.getElementById("start-btn").disabled = false;
+    }
+
+    function resetTimer() {
+      clearInterval(timerInterval);
+      timerRunning = false;
+      timerValue = 120;
+      elapsedTime = 0;
+      matchDict = { match_bit: 0, match_time: 0 };
+      updateTimerDisplay();
+      sendMatchDict(); // Send match_dict when reset
+      document.getElementById("start-btn").disabled = false;
+      document.getElementById("pause-btn").disabled = true;
+      document.getElementById("reset-btn").disabled = true;
+    }
+
+    function increaseTimer() {
+      timerValue += 30;
+      updateTimerDisplay();
+    }
+    function decreaseTimer() {
+      timerValue = Math.max(0, timerValue - 30);
+      updateTimerDisplay();
+    }
+    function updateTimerDisplay() {
+      document.getElementById("timer-info").textContent = `${timerValue}s`;
+    }
+
+    function sendMatchDict() {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "match_dict", data: matchDict }));
+      }
+    }
+  </script>
+</body>
+
 </html>

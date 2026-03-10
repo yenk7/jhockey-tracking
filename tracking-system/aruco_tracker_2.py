@@ -5,7 +5,54 @@ import asyncio
 import base64
 import os
 import json
+import threading
+import platform
 from collections import deque
+
+import tracker_config as cfg
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Threaded camera capture — hides USB I/O latency behind detection work
+# ──────────────────────────────────────────────────────────────────────────────
+
+class ThreadedCamera:
+    """Continuously grabs frames in a background thread so the main loop
+    always gets the latest frame without blocking on USB I/O (~20-30ms saved)."""
+
+    def __init__(self, cap):
+        self.cap = cap
+        self._frame = None
+        self._ret = False
+        self._lock = threading.Lock()
+        self._running = True
+        self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._thread.start()
+
+    def _capture_loop(self):
+        while self._running:
+            ret, frame = self.cap.read()
+            with self._lock:
+                self._ret = ret
+                self._frame = frame
+
+    def read(self):
+        with self._lock:
+            if self._frame is not None:
+                return self._ret, self._frame.copy()
+            return False, None
+
+    def release(self):
+        self._running = False
+        self._thread.join(timeout=2)
+        self.cap.release()
+
+    # Delegate property setters so callers can still do cap.set(...)
+    def set(self, prop, val):
+        return self.cap.set(prop, val)
+
+    def get(self, prop):
+        return self.cap.get(prop)
 
 # Store both corner positions and their pixel locations when locked
 locked_corners = None  # World coordinates of corners
@@ -18,7 +65,7 @@ position_kalman_filters = {}  # Stores Kalman filters for each marker
 
 # Movement stability filtering
 previous_robot_positions = {}  # Stores last sent positions for each robot
-movement_threshold = {'x': 1.0, 'y': 1.0}  # Minimum movement required to send update (in cm)
+movement_threshold = {'x': 0.0, 'y': 0.0}  # Minimum movement required to send update (in cm)
 
 # Frame processing optimization
 frame_count = 0
@@ -29,6 +76,55 @@ marker_last_seen = {}  # Track when each marker was last detected
 marker_timestamps = {}  # Track last-seen timestamps per marker
 markers_seen_before = set()  # Track markers seen at least once
 recovery_mode = False  # Recovery flag
+recovery_missing_streak = 0
+recovery_found_streak = 0
+
+
+def reset_tracking_state():
+    """Reset runtime tracking state for a fresh tracking session."""
+    global locked_corners, locked_pixel_positions, lock_state
+    global marker_history, position_kalman_filters, previous_robot_positions
+    global marker_last_seen, marker_timestamps, markers_seen_before
+    global recovery_mode, recovery_missing_streak, recovery_found_streak
+
+    marker_history.clear()
+    position_kalman_filters.clear()
+    previous_robot_positions.clear()
+    marker_last_seen.clear()
+    marker_timestamps.clear()
+    markers_seen_before.clear()
+    recovery_mode = False
+    recovery_missing_streak = 0
+    recovery_found_streak = 0
+    locked_corners = None
+    locked_pixel_positions = None
+    lock_state = False
+
+
+def prune_stale_tracking_state(now):
+    """Remove stale marker and robot state that should not survive indefinitely."""
+    stale_history_ids = {
+        mid for mid, ts in marker_last_seen.items()
+        if now - ts > cfg.MARKER_HISTORY_EXPIRY_S
+    }
+
+    for mid in stale_history_ids:
+        marker_history.pop(mid, None)
+
+    stale_state_ids = {
+        mid for mid, ts in marker_timestamps.items()
+        if now - ts > cfg.SEEN_MARKER_PRUNE_TIMEOUT_S
+    }
+
+    for mid in stale_state_ids:
+        marker_last_seen.pop(mid, None)
+        marker_timestamps.pop(mid, None)
+        marker_history.pop(mid, None)
+        position_kalman_filters.pop(mid, None)
+        markers_seen_before.discard(mid)
+        previous_robot_positions.pop(mid, None)
+
+    return len(stale_history_ids), len(stale_state_ids)
 
 def make_parameters_recovery_friendly(base_params):
     """Return a much more permissive parameter set for recovery mode."""
@@ -40,19 +136,19 @@ def make_parameters_recovery_friendly(base_params):
     recovery_params['adaptiveThreshConstant'] = max(7, base_params.get('adaptiveThreshConstant', 7))
 
     # Size constraints: allow smaller and larger perimeters
-    recovery_params['minMarkerPerimeterRate'] = max(0.005, base_params.get('minMarkerPerimeterRate', 0.03) * 0.4)
-    recovery_params['maxMarkerPerimeterRate'] = min(5.0, base_params.get('maxMarkerPerimeterRate', 4.0) * 1.7)
+    recovery_params['minMarkerPerimeterRate'] = max(0.005, base_params.get('minMarkerPerimeterRate', 0.03) * cfg.RECOVERY_PERIMETER_MIN_SCALE)
+    recovery_params['maxMarkerPerimeterRate'] = min(5.0, base_params.get('maxMarkerPerimeterRate', 4.0) * cfg.RECOVERY_PERIMETER_MAX_SCALE)
 
     # Shape/approximation tolerance
-    recovery_params['polygonalApproxAccuracyRate'] = min(0.12, base_params.get('polygonalApproxAccuracyRate', 0.03) * 2.5)
-    recovery_params['minCornerDistanceRate'] = max(0.005, base_params.get('minCornerDistanceRate', 0.05) * 0.4)
+    recovery_params['polygonalApproxAccuracyRate'] = min(0.12, base_params.get('polygonalApproxAccuracyRate', 0.03) * cfg.RECOVERY_APPROX_SCALE)
+    recovery_params['minCornerDistanceRate'] = max(0.005, base_params.get('minCornerDistanceRate', 0.05) * cfg.RECOVERY_CORNER_DIST_SCALE)
 
     # Border & refinement
     recovery_params['minDistanceToBorder'] = 0
     recovery_params['cornerRefinementMethod'] = 0  # CORNER_REFINE_NONE for speed
 
     # Error correction tolerance
-    recovery_params['errorCorrectionRate'] = max(0.7, base_params.get('errorCorrectionRate', 0.35))
+    recovery_params['errorCorrectionRate'] = max(cfg.RECOVERY_ERROR_CORRECTION_MIN, base_params.get('errorCorrectionRate', 0.35))
 
     print("🔍 Recovery parameters prepared: permissive detection")
     return recovery_params
@@ -73,9 +169,14 @@ def _build_detector(dictionary, params_dict):
     mbb = int(params_dict.get('markerBorderBits', 1))
     params_dict['markerBorderBits'] = max(1, mbb)
 
-    # perspectiveRemoveIgnoredMarginPerCell in [0, 1]
+    # perspectiveRemoveIgnoredMarginPerCell in [0, 0.49]
+    # (>=0.5 can produce zero/negative inner ROI per cell in OpenCV internals)
     margin = float(params_dict.get('perspectiveRemoveIgnoredMarginPerCell', 0.13))
-    params_dict['perspectiveRemoveIgnoredMarginPerCell'] = min(1.0, max(0.0, margin))
+    params_dict['perspectiveRemoveIgnoredMarginPerCell'] = min(0.49, max(0.0, margin))
+
+    # maxErroneousBitsInBorderRate in [0, 1]
+    mebr = float(params_dict.get('maxErroneousBitsInBorderRate', 0.35))
+    params_dict['maxErroneousBitsInBorderRate'] = min(1.0, max(0.0, mebr))
 
     # minSideLengthCanonicalImg sufficiently large to avoid zero cell size; floor at 24
     msl = int(params_dict.get('minSideLengthCanonicalImg', 24))
@@ -121,31 +222,43 @@ def get_detector_for_mode(dictionary, base_params, in_recovery_mode):
 def check_recovery_needed(raw_ids, now):
     """Determine whether recovery mode should be active based on visibility history."""
     global recovery_mode, marker_timestamps, markers_seen_before
+    global recovery_missing_streak, recovery_found_streak
 
     current_markers = set()
     if raw_ids is not None and len(raw_ids) > 0:
         current_markers = {int(mid[0]) for mid in raw_ids}
 
+    current_known_markers = current_markers & markers_seen_before
+
     # Success conditions: if previously seen markers are visible again
-    if recovery_mode and (current_markers & markers_seen_before):
-        print(f"✅ Partial recovery - found markers: {sorted(list(current_markers & markers_seen_before))}")
-        recovery_mode = False
-        return False
+    if recovery_mode:
+        if current_known_markers:
+            recovery_found_streak += 1
+            recovery_missing_streak = 0
+            if recovery_found_streak >= cfg.RECOVERY_EXIT_CONSECUTIVE_HITS:
+                print(f"✅ Recovery complete - found markers: {sorted(list(current_known_markers))}")
+                recovery_mode = False
+                recovery_found_streak = 0
+                return False
+        else:
+            recovery_found_streak = 0
+        return True
 
     # Decide if we've been without known markers for long enough
     if markers_seen_before:
-        # If we see none of the known markers now
-        if not (current_markers & markers_seen_before):
-            # Compute time since any known marker was last seen
+        if not current_known_markers:
             last_seen_times = [now - marker_timestamps.get(mid, 0) for mid in markers_seen_before]
-            if last_seen_times and min(last_seen_times) > 1.0:
-                # Need recovery if we're not already in it
-                if not recovery_mode:
+            if last_seen_times and min(last_seen_times) > cfg.RECOVERY_TIMEOUT_S:
+                recovery_missing_streak += 1
+                if recovery_missing_streak >= cfg.RECOVERY_ENTER_CONSECUTIVE_MISSES:
                     print(f"🔄 Recovery mode activated - looking for lost markers: {sorted(list(markers_seen_before))}")
-                recovery_mode = True
-                return True
+                    recovery_mode = True
+                    recovery_missing_streak = 0
+                    return True
+        else:
+            recovery_missing_streak = 0
+            recovery_found_streak = 0
 
-    # Also if we've never seen any marker and raw_ids is empty for a while, don't spam
     return recovery_mode
 
 def filter_robot_movement(new_positions, threshold_x=1.0, threshold_y=1.0):
@@ -172,7 +285,8 @@ def filter_robot_movement(new_positions, threshold_x=1.0, threshold_y=1.0):
         if tag_id not in previous_robot_positions:
             filtered_positions[tag_id] = new_pos
             previous_robot_positions[tag_id] = new_pos.copy()
-            print(f"🤖 Robot {tag_id}: First position recorded at ({new_x:.1f}, {new_y:.1f})")
+            if cfg.LOG_LEVEL == "DEBUG":
+                print(f"🤖 Robot {tag_id}: First position recorded at ({new_x:.1f}, {new_y:.1f})")
             continue
         
         # Calculate movement from previous position
@@ -184,7 +298,8 @@ def filter_robot_movement(new_positions, threshold_x=1.0, threshold_y=1.0):
         if delta_x >= threshold_x or delta_y >= threshold_y:
             filtered_positions[tag_id] = new_pos
             previous_robot_positions[tag_id] = new_pos.copy()
-            print(f"🔄 Robot {tag_id}: Position updated ({prev_x:.1f},{prev_y:.1f}) → ({new_x:.1f},{new_y:.1f}) [Δx:{delta_x:.1f}, Δy:{delta_y:.1f}]")
+            if cfg.LOG_LEVEL == "DEBUG":
+                print(f"🔄 Robot {tag_id}: Position updated ({prev_x:.1f},{prev_y:.1f}) → ({new_x:.1f},{new_y:.1f}) [Δx:{delta_x:.1f}, Δy:{delta_y:.1f}]")
         else:
             # Keep previous position (no significant movement)
             filtered_positions[tag_id] = previous_robot_positions[tag_id]
@@ -225,36 +340,34 @@ def validate_marker_geometry(corner):
     if len(side_lengths) != 4 or min(side_lengths) <= 0:
         return False
     
-    # Check aspect ratio (should be roughly square)
     min_side = min(side_lengths)
     max_side = max(side_lengths)
     aspect_ratio = max_side / min_side
     
-    # Reject if too elongated (more lenient in recovery)
-    if aspect_ratio > (3.0 if recovery_mode else 2.5):
+    # Reject if too elongated (config-driven, more lenient in recovery)
+    ar_limit = cfg.GEOMETRY_ASPECT_RATIO_MAX_RECOVERY if recovery_mode else cfg.GEOMETRY_ASPECT_RATIO_MAX
+    if aspect_ratio > ar_limit:
         return False
     
     # Check if marker is too small (likely noise)
-    if min_side < (10 if recovery_mode else 15):  # Allow smaller in recovery
+    min_px = cfg.GEOMETRY_MIN_SIDE_PX_RECOVERY if recovery_mode else cfg.GEOMETRY_MIN_SIDE_PX
+    if min_side < min_px:
         return False
     
-    # Check if marker is unreasonably large (likely false positive)
-    if max_side > 600:  # Allow slightly larger
+    # Check if marker is unreasonably large
+    if max_side > cfg.GEOMETRY_MAX_SIDE_PX:
         return False
     
     # Calculate area to check for reasonable polygon
     try:
-        # Use shoelace formula for polygon area
         x = corner_pts[:, 0]
         y = corner_pts[:, 1]
         area = 0.5 * abs(sum(x[i] * y[(i + 1) % 4] - x[(i + 1) % 4] * y[i] for i in range(4)))
-        
-        # Expected area for a square
         expected_area = min_side * min_side
         area_ratio = area / expected_area if expected_area > 0 else 0
         
-        # Reject if area is too different from expected square area
-        if area_ratio < (0.4 if recovery_mode else 0.5) or area_ratio > (2.2 if recovery_mode else 2.0):
+        ar_range = cfg.GEOMETRY_AREA_RATIO_RANGE_RECOVERY if recovery_mode else cfg.GEOMETRY_AREA_RATIO_RANGE
+        if area_ratio < ar_range[0] or area_ratio > ar_range[1]:
             return False
             
     except (ValueError, ZeroDivisionError):
@@ -264,71 +377,94 @@ def validate_marker_geometry(corner):
 
 def filter_markers(marker_ids, marker_corners, history_frames=5, min_detections=3, max_jitter=20):
     """
-    Filter out false positive markers by applying temporal consistency and geometry checks
-    
+    Filter out false positive markers by applying temporal consistency and geometry checks.
+
+    Movement vs. jitter distinction:
+    - Small displacement (< max_jitter): normal inter-frame noise — accumulate history as usual.
+    - Large displacement (>= max_jitter but < large_move_threshold): likely real movement — 
+      reset history so the tag can re-qualify quickly rather than being silently dropped.
+    - Very large displacement (>= large_move_threshold): treat as teleport / ID collision noise
+      and skip this detection entirely.
+
     Args:
         marker_ids: IDs of detected markers
         marker_corners: Corners of detected markers
         history_frames: Number of frames to keep in history
         min_detections: Minimum number of detections required to accept a marker
-        max_jitter: Maximum allowed position change between frames (in pixels)
-        
+        max_jitter: Pixel threshold below which displacement is considered noise
+
     Returns:
         filtered_ids: List of IDs that passed the filtering
         filtered_corners: List of corners that passed the filtering
     """
     global marker_history
-    
+
     if marker_ids is None or len(marker_ids) == 0:
         return None, None
-    
+
+    # A displacement this large in a single frame is almost certainly a false detection
+    # (misidentified ID), not genuine movement.  Scale with max_jitter so it stays
+    # proportional across resolutions.
+    large_move_threshold = max_jitter * 8
+
     # Calculate marker centers
     centers = [np.mean(corner[0], axis=0) for corner in marker_corners]
-    
+
     # First pass: Validate geometry and update history
     valid_indices = []
-    current_markers = {}
-    
+
     for i, marker_id in enumerate(marker_ids):
         marker_id = int(marker_id[0])
-        
+
         # Skip markers with invalid geometry
         if not validate_marker_geometry(marker_corners[i]):
             continue
-            
-        current_markers[marker_id] = centers[i]
-        
+
         # Initialize history for new markers
         if marker_id not in marker_history:
             marker_history[marker_id] = deque(maxlen=history_frames)
-        
-        # Check position jitter (temporal consistency)
+
+        # Check displacement from last known position
         if len(marker_history[marker_id]) > 0:
             last_pos = marker_history[marker_id][-1]
-            current_pos = centers[i]
-            distance = np.linalg.norm(current_pos - last_pos)
-            
-            # If jitter is too high, don't add to history
-            if distance > max_jitter:
+            distance = np.linalg.norm(centers[i] - last_pos)
+
+            if distance >= large_move_threshold:
+                # Almost certainly a spurious detection with a colliding ID — skip.
+                if cfg.LOG_LEVEL == "DEBUG":
+                    print(f"⚠️  Marker {marker_id}: teleport ({distance:.0f}px) ignored")
                 continue
-        
+            elif distance >= max_jitter:
+                # Real movement: reset history so re-qualification is fast (not instant,
+                # but just min_detections frames rather than never).
+                marker_history[marker_id].clear()
+                if cfg.LOG_LEVEL == "DEBUG":
+                    print(f"🏃 Marker {marker_id}: moved {distance:.0f}px — history reset for fast reacquire")
+
         # Add current position to history
         marker_history[marker_id].append(centers[i])
         valid_indices.append(i)
-    
+
     # Second pass: Check detection consistency
     filtered_indices = []
     for i in valid_indices:
         marker_id = int(marker_ids[i][0])
-        
-        # Only include markers that have been seen consistently
+
         detection_count = len(marker_history[marker_id])
         detection_rate = detection_count / history_frames
-        
-        # Require minimum detections and reasonable detection rate
-        if detection_count >= min_detections and detection_rate >= 0.4:
+
+        # Robot tags need consistent detection to filter false positives
+        if marker_id > cfg.CORNER_TAG_MAX_ID:
+            if detection_count >= cfg.FILTER_MIN_DETECTIONS_ROBOT and detection_rate >= cfg.FILTER_DETECTION_RATE_ROBOT:
+                filtered_indices.append(i)
+                if cfg.LOG_LEVEL == "DEBUG":
+                    print(f"🤖 Robot {marker_id} passed filter (detections: {detection_count}/{history_frames}, rate: {detection_rate:.0%})")
+            elif detection_count >= 1 and cfg.LOG_LEVEL == "DEBUG":
+                print(f"⏳ Robot {marker_id} pending ({detection_count}/{cfg.FILTER_MIN_DETECTIONS_ROBOT} frames)")
+        # Corner tags
+        elif detection_count >= min_detections and detection_rate >= cfg.FILTER_DETECTION_RATE_CORNER:
             filtered_indices.append(i)
-    
+
     # Create filtered lists
     if filtered_indices:
         filtered_ids = np.array([marker_ids[i] for i in filtered_indices])
@@ -353,70 +489,33 @@ def load_calibration_parameters(filename="best_aruco_params.json"):
 
 def make_parameters_dynamic_friendly(static_params):
     """
-    Adjust calibration parameters to be more tolerant for moving ArUco markers
-    Static calibration often over-optimizes for stationary targets
+    Adjust calibration parameters to be more tolerant for moving markers.
+    Uses offsets/scales from tracker_config.DYNAMIC_ADJUSTMENTS.
     """
+    adj = cfg.DYNAMIC_ADJUSTMENTS
     dynamic_params = static_params.copy()
-    
-    # Make adaptive thresholding more tolerant
+
     if 'adaptiveThreshWinSizeMin' in dynamic_params:
-        dynamic_params['adaptiveThreshWinSizeMin'] = max(3, dynamic_params['adaptiveThreshWinSizeMin'] - 2)
-    
+        dynamic_params['adaptiveThreshWinSizeMin'] = max(3, dynamic_params['adaptiveThreshWinSizeMin'] + adj['adaptiveThreshWinSizeMin_offset'])
     if 'adaptiveThreshWinSizeMax' in dynamic_params:
-        dynamic_params['adaptiveThreshWinSizeMax'] = min(50, dynamic_params['adaptiveThreshWinSizeMax'] + 10)
-    
+        dynamic_params['adaptiveThreshWinSizeMax'] = min(50, dynamic_params['adaptiveThreshWinSizeMax'] + adj['adaptiveThreshWinSizeMax_offset'])
     if 'adaptiveThreshConstant' in dynamic_params:
-        dynamic_params['adaptiveThreshConstant'] = max(3, dynamic_params['adaptiveThreshConstant'] - 2)
-    
-    # Make perimeter detection more lenient 
+        dynamic_params['adaptiveThreshConstant'] = max(3, dynamic_params['adaptiveThreshConstant'] + adj['adaptiveThreshConstant_offset'])
     if 'minMarkerPerimeterRate' in dynamic_params:
-        dynamic_params['minMarkerPerimeterRate'] = dynamic_params['minMarkerPerimeterRate'] * 0.7  # 30% more lenient
-    
+        dynamic_params['minMarkerPerimeterRate'] = dynamic_params['minMarkerPerimeterRate'] * adj['minMarkerPerimeterRate_scale']
     if 'maxMarkerPerimeterRate' in dynamic_params:
-        dynamic_params['maxMarkerPerimeterRate'] = dynamic_params['maxMarkerPerimeterRate'] * 1.3  # 30% more lenient
-    
-    # Increase error correction for moving targets
+        dynamic_params['maxMarkerPerimeterRate'] = dynamic_params['maxMarkerPerimeterRate'] * adj['maxMarkerPerimeterRate_scale']
     if 'errorCorrectionRate' in dynamic_params:
-        dynamic_params['errorCorrectionRate'] = min(1.0, dynamic_params['errorCorrectionRate'] + 0.1)
-    
-    # Make corner detection more forgiving
+        dynamic_params['errorCorrectionRate'] = min(1.0, dynamic_params['errorCorrectionRate'] + adj['errorCorrectionRate_offset'])
     if 'polygonalApproxAccuracyRate' in dynamic_params:
-        dynamic_params['polygonalApproxAccuracyRate'] = min(0.1, dynamic_params['polygonalApproxAccuracyRate'] + 0.02)
-    
+        dynamic_params['polygonalApproxAccuracyRate'] = min(0.1, dynamic_params['polygonalApproxAccuracyRate'] + adj['polygonalApproxAccuracyRate_offset'])
     if 'minCornerDistanceRate' in dynamic_params:
-        dynamic_params['minCornerDistanceRate'] = max(0.01, dynamic_params['minCornerDistanceRate'] - 0.02)
-    
+        dynamic_params['minCornerDistanceRate'] = max(0.01, dynamic_params['minCornerDistanceRate'] + adj['minCornerDistanceRate_offset'])
+
     return dynamic_params
 
-# Removed complex adaptive functions - keeping it simple for reliability
-
-# Resolution settings with crop configurations
-RESOLUTION_CONFIGS = {
-    '4k': {
-        'width': 3840,
-        'height': 2160,
-        'crop': {
-            'x': 500,
-            'y': 400,
-            'w': 3840,
-            'h': 2160
-        },
-        'stream_resolution': (1280, 720),  # 720p for streaming
-        'display_name': '4K (3840x2160)'
-    },
-    '1080p': {
-        'width': 1920,
-        'height': 1080,
-        'crop': {
-            'x': 10,  # Adjusted for 1080p
-            'y': 10,  # Adjusted for 1080p
-            'w': 1920,
-            'h': 1080
-        },
-        'stream_resolution': (960, 540),  # Half resolution for streaming
-        'display_name': 'Full HD (1920x1080)'
-    }
-}
+# Use resolution configs from tracker_config
+RESOLUTION_CONFIGS = cfg.RESOLUTION_CONFIGS
 
 def crop_frame(frame, resolution_config):
     """
@@ -438,11 +537,12 @@ def crop_frame(frame, resolution_config):
 async def track_aruco_tags(lock_queue, scale_factor=0.7, resolution='4k', movement_threshold_cm=1.0):
     
     global locked_corners, locked_pixel_positions, lock_state, movement_threshold
+    global recovery_mode
     print(f"🟢 Initial lock state: {lock_state}", flush=True)
-    
-    # Initialize recovery tracking variables
-    recovery_mode = False
-    marker_last_seen = {}
+    print(f"🏷️  Tag system: {cfg.TAG_SYSTEM} ({cfg.TAG_DICTIONARY_NAME})")
+
+    reset_tracking_state()
+    print("🧹 Tracking state reset")
     
     # Set movement threshold
     movement_threshold['x'] = movement_threshold_cm
@@ -458,71 +558,72 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7, resolution='4k', moveme
     print(f"📹 Using {config['display_name']} resolution with crop settings: {config['crop']}")
     print(f"📹 Streaming at {config['stream_resolution']} resolution")
 
-    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
+    # Get dictionary from config (supports ArUco and AprilTag)
+    dictionary = cfg.get_dictionary()
     detector_params = cv2.aruco.DetectorParameters()
 
     # Try to load calibrated parameters, but make them more tolerant for moving targets
     calibration = load_calibration_parameters()
     if calibration:
-        # Apply loaded parameters but make them more dynamic-friendly
         base_params = make_parameters_dynamic_friendly(calibration)
         print("🔄 Parameters optimized for moving target detection")
     else:
-        # Use default parameters
-        base_params = {
-            'adaptiveThreshWinSizeMin': 3,
-            'adaptiveThreshWinSizeMax': 30,
-            'minMarkerPerimeterRate': 0.03,
-            'maxMarkerPerimeterRate': 4.0,
-            'polygonalApproxAccuracyRate': 0.02,
-            'minCornerDistanceRate': 0.05,
-            'cornerRefinementMethod': cv2.aruco.CORNER_REFINE_CONTOUR
-        }
+        base_params = cfg.DEFAULT_DETECTION_PARAMS.copy()
 
     # Build initial detector (normal mode)
     detector = get_detector_for_mode(dictionary, base_params, False)
     print("🔄 Detector created (normal mode)")
-    cap = cv2.VideoCapture(0)
+    if platform.system() == "Darwin" and hasattr(cv2, "CAP_AVFOUNDATION"):
+        raw_cap = cv2.VideoCapture(0, cv2.CAP_AVFOUNDATION)
+    else:
+        raw_cap = cv2.VideoCapture(0)
+
+    # Keep capture buffer shallow so processing uses the newest frame.
+    raw_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     
-    # Set camera resolution based on configuration
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, config['width'])
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config['height'])
+    raw_cap.set(cv2.CAP_PROP_FRAME_WIDTH, config['width'])
+    raw_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config['height'])
     
-    # Verify the resolution was set correctly
-    actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-    actual_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    actual_width = raw_cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    actual_height = raw_cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
     print(f"📹 Camera resolution set to: {actual_width}x{actual_height}")
+
+    # Wrap in threaded camera if enabled
+    if cfg.THREADED_CAPTURE:
+        cap = ThreadedCamera(raw_cap)
+        print("🧵 Threaded camera capture enabled")
+        time.sleep(0.3)  # let the thread grab a first frame
+    else:
+        cap = raw_cap
     
-    # Only run resolution debug in 4K mode to avoid spamming logs
-    if resolution == '4k':
-        print("\n[Camera Resolution Debug - 4K Mode]")
-        test_resolutions = [
-            (640, 480), (1280, 720), (1920, 1080), (2560, 1440), (3840, 2160)
-        ]
-        for w, h in test_resolutions:
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-            actual_w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-            actual_h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-            print(f"Tried {w}x{h} -> Camera reports: {actual_w}x{actual_h}")
-        # Reset to intended resolution
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, config['width'])
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config['height'])
+    # Use per-resolution scale factor from config (overrides CLI if present)
+    scale_factor = config.get('detection_scale', scale_factor)
+    print(f"🔬 Detection scale factor: {scale_factor}")
+    
+    # Prepare lens correction calibration; maps are built lazily for the actual
+    # post-crop frame size to avoid map/frame dimension mismatches.
+    undistort_map1 = None
+    undistort_map2 = None
+    undistort_map_size = None
+    undistort_cam_mtx = None
+    undistort_dist_coeffs = None
+    if cfg.UNDISTORT_ENABLED:
+        undistort_cam_mtx, undistort_dist_coeffs = cfg.load_camera_calibration(resolution)
+        print("📷 Undistortion enabled (maps will be generated for cropped frame size)")
+    else:
+        print("📷 Undistortion disabled (set UNDISTORT_ENABLED = True in tracker_config.py)")
     
     print(f"🔍 Using {config['display_name']} for detection, streaming at {config['stream_resolution']}")
     
     prev_time = time.time()
-    stream_fps_limit = 20  # Limit streaming to 20 FPS to reduce bandwidth
+    stream_fps_limit = cfg.STREAM_FPS_LIMIT
     stream_frame_interval = 1.0 / stream_fps_limit
-    last_stream_frame_time = 0  # Initialize stream frame timing
-    frame_count = 0  # Initialize frame counter
+    last_stream_frame_time = 0
+    frame_count = 0
+    last_history_cleanup = time.time()
     
-    corner_tag_positions = {
-        0: np.array([0, 0]),
-        1: np.array([0, 7.75]),
-        2: np.array([3.74, 7.75]),
-        3: np.array([3.74, 0])
-    }
+    # Corner tag positions from config
+    corner_tag_positions = cfg.CORNER_TAG_POSITIONS
 
     while True:
         # Check for lock state updates
@@ -559,7 +660,34 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7, resolution='4k', moveme
         # Apply cropping with resolution-specific settings
         frame = crop_frame(frame, config)
 
-        frame = cv2.rotate(frame, cv2.ROTATE_180)
+        # Conditional rotation (skip if camera is mounted right-side-up)
+        if cfg.CAMERA_ROTATE_180:
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
+
+        # Apply lens distortion correction (LUT generated for current frame size)
+        if undistort_cam_mtx is not None and undistort_dist_coeffs is not None:
+            h_frame, w_frame = frame.shape[:2]
+            current_size = (w_frame, h_frame)
+            if undistort_map1 is None or undistort_map_size != current_size:
+                new_mtx, _ = cv2.getOptimalNewCameraMatrix(
+                    undistort_cam_mtx,
+                    undistort_dist_coeffs,
+                    current_size,
+                    1,
+                    current_size,
+                )
+                undistort_map1, undistort_map2 = cv2.initUndistortRectifyMap(
+                    undistort_cam_mtx,
+                    undistort_dist_coeffs,
+                    None,
+                    new_mtx,
+                    current_size,
+                    cv2.CV_16SC2,
+                )
+                undistort_map_size = current_size
+                print(f"📷 Undistortion maps generated ({w_frame}×{h_frame})")
+
+            frame = cv2.remap(frame, undistort_map1, undistort_map2, cv2.INTER_LINEAR)
 
         curr_time = time.time()
         fps = 1.0 / (curr_time - prev_time)
@@ -570,10 +698,6 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7, resolution='4k', moveme
         small_frame = cv2.resize(frame, (0, 0), fx=scale_factor, fy=scale_factor)
         gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
 
-        # Debug: Save or display the grayscale image
-        cv2.imwrite("debug_gray_image.jpg", gray)
-
-        # Ensure the grayscale image has enough contours
         if gray is None or gray.size == 0:
             print("⚠️ Grayscale image is empty or invalid")
             await asyncio.sleep(0.1)
@@ -600,18 +724,25 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7, resolution='4k', moveme
                 detector = get_detector_for_mode(dictionary, base_params, recovery_mode)
                 print("🔁 Detector switched:", "recovery" if recovery_mode else "normal")
 
+            # Periodic cleanup of stale marker_history entries
+            if curr_time - last_history_cleanup > cfg.MARKER_HISTORY_EXPIRY_S:
+                stale_history_count, stale_state_count = prune_stale_tracking_state(curr_time)
+                if stale_history_count and cfg.LOG_LEVEL == "DEBUG":
+                    print(f"🧹 Cleaned {stale_history_count} stale marker history entries")
+                if stale_state_count:
+                    print(f"🧹 Pruned {stale_state_count} stale marker state entries")
+                last_history_cleanup = curr_time
+
             # Filter out false positives
             if ids is not None and len(ids) > 0:
-                # Use normal filtering
-                max_jitter = 60 if resolution == '4k' else 30
-                min_detections = 4 if resolution == '4k' else 3
+                max_jitter = cfg.FILTER_MAX_JITTER_4K if resolution == '4k' else cfg.FILTER_MAX_JITTER_1080P
+                min_detections = cfg.FILTER_MIN_DETECTIONS_ROBOT if resolution == '4k' else cfg.FILTER_MIN_DETECTIONS_CORNER
 
-                # In recovery mode, be more lenient
                 if recovery_mode:
                     max_jitter *= 2
                     min_detections = max(1, min_detections - 2)
 
-                ids, corners = filter_markers(ids, corners, history_frames=6, min_detections=min_detections, max_jitter=max_jitter)
+                ids, corners = filter_markers(ids, corners, history_frames=cfg.FILTER_HISTORY_FRAMES, min_detections=min_detections, max_jitter=max_jitter)
         except cv2.error as e:
             print(f"⚠️ OpenCV error during detectMarkers: {e}")
             await asyncio.sleep(0.1)
@@ -622,27 +753,34 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7, resolution='4k', moveme
         estimated_robot_positions = {}  # Stores estimated real-world positions
 
         if ids is not None:
+            if cfg.LOG_LEVEL == "DEBUG":
+                print(f"🔎 Detected marker IDs after filtering: {[int(id[0]) for id in ids]}")
             corners = [corner / scale_factor for corner in corners]
-            cv2.aruco.drawDetectedMarkers(frame, corners, ids)
+
+            # Determine if we need to draw on frame (only when streaming)
+            should_draw = (curr_time - last_stream_frame_time >= stream_frame_interval)
+            if should_draw:
+                cv2.aruco.drawDetectedMarkers(frame, corners, ids)
 
             for i, corner in enumerate(corners):
                 marker_id = int(ids[i][0])  # Convert NumPy int to Python int
 
-                if marker_id >= 30:
+                if marker_id > cfg.MAX_VALID_TAG_ID:
                     continue
 
                 center = np.mean(corner[0], axis=0)
 
                 if marker_id in corner_tag_positions:
-                    detected_corner_positions[marker_id] = corner_tag_positions[marker_id] * 30.48
+                    detected_corner_positions[marker_id] = corner_tag_positions[marker_id] * cfg.FEET_TO_CM
                     pixel_positions[marker_id] = center
 
-                if marker_id > 3:
+                if marker_id > cfg.CORNER_TAG_MAX_ID:
                     pixel_positions[marker_id] = center
 
                 center_int = tuple(center.astype(int))
-                cv2.circle(frame, center_int, 5, (0, 255, 0), -1)
-                cv2.putText(frame, f"ID: {marker_id}", (center_int[0] + 10, center_int[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                if should_draw:
+                    cv2.circle(frame, center_int, 5, (0, 255, 0), -1)
+                    cv2.putText(frame, f"ID: {marker_id}", (center_int[0] + 10, center_int[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
             # If locked, work with locked corners
             if lock_state and locked_corners:
@@ -655,7 +793,7 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7, resolution='4k', moveme
                 
                 # First, add all currently visible corners
                 for tag_id in pixel_positions:
-                    if int(tag_id) <= 3:
+                    if int(tag_id) <= cfg.CORNER_TAG_MAX_ID:
                         combined_pixels[int(tag_id)] = pixel_positions[tag_id]
                 
                 # Then, for any locked corner that's not currently visible,
@@ -663,18 +801,19 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7, resolution='4k', moveme
                 if locked_pixel_positions:
                     for tag_id in locked_corners:
                         tag_id = int(tag_id)
-                        if tag_id <= 3 and tag_id not in combined_pixels and tag_id in locked_pixel_positions:
+                        if tag_id <= cfg.CORNER_TAG_MAX_ID and tag_id not in combined_pixels and tag_id in locked_pixel_positions:
                             combined_pixels[tag_id] = locked_pixel_positions[tag_id]
-                            # Mark this as a "ghost" corner in the frame for visualization
-                            center_int = tuple(locked_pixel_positions[tag_id].astype(int))
-                            cv2.circle(frame, center_int, 8, (0, 0, 255), 2)  # Red circle for ghost corners
-                            cv2.putText(frame, f"ID: {tag_id} (locked)", 
-                                      (center_int[0] + 10, center_int[1] - 10), 
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                            if should_draw:
+                                # Mark this as a "ghost" corner in the frame for visualization
+                                center_int = tuple(locked_pixel_positions[tag_id].astype(int))
+                                cv2.circle(frame, center_int, 8, (0, 0, 255), 2)  # Red circle for ghost corners
+                                cv2.putText(frame, f"ID: {tag_id} (locked)", 
+                                          (center_int[0] + 10, center_int[1] - 10), 
+                                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                 
                 # Add all robot markers
                 for tag_id in pixel_positions:
-                    if int(tag_id) > 3:
+                    if int(tag_id) > cfg.CORNER_TAG_MAX_ID:
                         combined_pixels[int(tag_id)] = pixel_positions[tag_id]
                 
                 # Use the combined information
@@ -687,7 +826,19 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7, resolution='4k', moveme
                 if detected_corner_positions:
                     locked_corners = detected_corner_positions.copy() 
                 if pixel_positions:
-                    locked_pixel_positions = {int(k): v.copy() for k, v in pixel_positions.items() if int(k) <= 3}
+                    locked_pixel_positions = {int(k): v.copy() for k, v in pixel_positions.items() if int(k) <= cfg.CORNER_TAG_MAX_ID}
+            
+            if cfg.LOG_LEVEL == "DEBUG":
+                robot_pixels = {k: v for k, v in pixel_positions.items() if int(k) > cfg.CORNER_TAG_MAX_ID}
+                corner_pixels = {k: v for k, v in pixel_positions.items() if int(k) <= cfg.CORNER_TAG_MAX_ID}
+                if robot_pixels:
+                    print(f"📍 Robot pixel positions: {robot_pixels}")
+                if corner_pixels and frame_count % 30 == 0:
+                    print(f"🏁 Corner pixel positions: {corner_pixels}")
+                    for cid, ppos in corner_pixels.items():
+                        world_pos = detected_corner_positions.get(cid, [0,0])
+                        print(f"   Corner {cid}: pixel=({ppos[0]:.0f}, {ppos[1]:.0f}) -> world=({world_pos[0]:.1f}, {world_pos[1]:.1f})")
+                print(f"🏁 Corner count: {len(detected_corner_positions)}, Lock state: {lock_state}")
             
             # Only proceed if we have enough corners for coordinate transformation
             if len(detected_corner_positions) >= 3:
@@ -724,7 +875,7 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7, resolution='4k', moveme
                         
                         # Calculate position for all robot tags
                         for tag_id, pixel_pos in pixel_positions.items():
-                            if int(tag_id) > 3:  # Only process robot tags
+                            if int(tag_id) > cfg.CORNER_TAG_MAX_ID:  # Only process robot tags
                                 tag_id = int(tag_id)
                                 pixel_tag = np.array([pixel_pos], dtype=np.float32)
                                 
@@ -757,18 +908,22 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7, resolution='4k', moveme
             
             # Apply movement threshold filtering to reduce jitter
             if estimated_robot_positions:
+                if cfg.LOG_LEVEL == "DEBUG":
+                    print(f"📍 Raw robot positions before filter: {estimated_robot_positions}")
                 estimated_robot_positions = filter_robot_movement(
                     estimated_robot_positions, 
                     movement_threshold['x'], 
                     movement_threshold['y']
                 )
+                if cfg.LOG_LEVEL == "DEBUG":
+                    print(f"📍 Robot positions after filter: {estimated_robot_positions}")
 
         # Optimize frame encoding - only encode for streaming at limited FPS
         base64_frame = None
         
         # Only encode frame if enough time has passed (limit streaming FPS)
         if curr_time - last_stream_frame_time >= stream_frame_interval:
-            encode_params = [cv2.IMWRITE_JPEG_QUALITY, 70 if resolution == '4k' else 75]
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, cfg.STREAM_JPEG_QUALITY_4K if resolution == '4k' else cfg.STREAM_JPEG_QUALITY_1080P]
             
             # Create streaming version using configuration
             stream_frame = cv2.resize(frame, config['stream_resolution'])
@@ -789,21 +944,24 @@ async def track_aruco_tags(lock_queue, scale_factor=0.7, resolution='4k', moveme
             'movement_threshold': f"{movement_threshold['x']}cm"
         }
         
+        if cfg.LOG_LEVEL == "DEBUG" and output_dict['robot_tags']:
+            print(f"📤 OUTPUT robot_tags: {output_dict['robot_tags']}")
+            x_max = cfg.CORNER_TAG_POSITIONS[2][0] * cfg.FEET_TO_CM
+            y_max = cfg.CORNER_TAG_POSITIONS[2][1] * cfg.FEET_TO_CM
+            for tag_id, pos in output_dict['robot_tags'].items():
+                if pos[0] < 0 or pos[0] > x_max or pos[1] < 0 or pos[1] > y_max:
+                    print(f"⚠️ Robot {tag_id} OUT OF BOUNDS: ({pos[0]:.1f}, {pos[1]:.1f})")
+        
         # Only include frame data when we have a new encoded frame
         if base64_frame is not None:
             output_dict['frame'] = base64_frame
 
         # Dynamic sleep based on processing time to maintain target FPS
         processing_time = time.time() - curr_time
-        target_fps = 30  # Target detection FPS
-        target_frame_time = 1.0 / target_fps
-        sleep_time = max(0.001, target_frame_time - processing_time)  # Minimum 1ms sleep
+        target_frame_time = 1.0 / cfg.TARGET_DETECTION_FPS
+        sleep_time = max(0.001, target_frame_time - processing_time)
         
         await asyncio.sleep(sleep_time)
         yield output_dict
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
     cap.release()
-    cv2.destroyAllWindows()

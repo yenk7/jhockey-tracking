@@ -7,7 +7,7 @@ import time
 
 from digi.xbee.devices import XBeeDevice
 
-BAUD_RATE = rate_limit = 115200   # Limit to sending at most every rate_limit = 0.05  # Limit to sending at most every rate_limit = 0.05  # Limit to sending at most every 50ms
+BAUD_RATE = 115200
 # Use a more dynamic approach to find the XBee device on Mac
 TARGET_HWID_SUBSTRING = "FT" # Common substring for FTDI chips used with XBee
 
@@ -78,6 +78,27 @@ def construct_payload(robot_tags, match_dict):
     return payload
 
 
+def send_broadcast_fast(device, data):
+    """
+    Send a broadcast TX request using a raw 802.15.4 API frame with
+    frame_id=0 (fire-and-forget: no TX Status response expected).
+    This avoids the blocking wait in device.send_data_broadcast().
+    """
+    payload = data.encode('utf-8') if isinstance(data, str) else data
+    # 802.15.4 TX Request (frame type 0x01)
+    #   frame_id = 0x00  (no TX Status expected)
+    #   dest_addr_16 = 0xFFFF (broadcast)
+    #   options = 0x00
+    frame_data = bytes([0x01, 0x00, 0xFF, 0xFF, 0x00]) + payload
+    length = len(frame_data)
+    # Build full API frame: start delimiter + length + data + checksum
+    frame = bytes([0x7E, (length >> 8) & 0xFF, length & 0xFF]) + frame_data
+    checksum = 0xFF - (sum(frame_data) & 0xFF)
+    frame += bytes([checksum])
+    # Write directly to the serial port
+    device.serial_port.write(frame)
+
+
 async def receive_data(device):
     uri = "ws://localhost:8765"
     retry_interval = 1.0  # seconds between reconnection attempts
@@ -90,8 +111,8 @@ async def receive_data(device):
                 match_dict = {"match_bit": 0, "match_time": 0}
                 
                 last_send_time = time.time()
-                rate_limit = 0.05  # Limit to sending at most every 50ms
-                #rate_limit = 0.025  # Limit to sending at most every 25ms
+                #rate_limit = 0.05  # Limit to sending at most every 50ms
+                rate_limit = 0.025  # Limit to sending at most every 25ms
                 while True:
                     message = await websocket.recv()
                     message = json.loads(message)
@@ -109,8 +130,9 @@ async def receive_data(device):
                         payload = construct_payload(robot_tags, match_dict)
                         
                         try:
-                            # Send the payload using the XBee device.
-                            device.send_data_broadcast(payload)
+                            # Send the payload — fire-and-forget for speed
+                            send_broadcast_fast(device, payload)
+                            #device.send_data_broadcast(payload)          # ~13 Hz (blocking)
                             # Use a cleaner print approach that clears the line properly
                             print(f"Sent: {payload}".ljust(80), end="\r", flush=True)
                             last_send_time = current_time

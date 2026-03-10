@@ -1,19 +1,15 @@
 # Mac-compatible version - removed Linux-specific CPU affinity commands
-# To launch the visualization: open Chrome and navigate to file:///Users/jhumechatronics/Desktop/mechatronics/visualize.html
-#run calibration mode with:
-# 4K mode (maximum accuracy)
-#   python3 main.py
-
-# 1080p mode (better performance) 
+#
+# ─── Calibration (run once) ──────────────────────────────────────
+#   Step 1 - Camera lens calibration (ChArUco board):
+#     python3 main.py --camera-calibrate --resolution 4k
+#
+#   Step 2 - ArUco detection parameters:
+#     python3 main.py --auto-calibrate --resolution 1080p
+#
+# ─── Run Tracker ─────────────────────────────────────────────────
 #   python3 main.py --resolution 1080p
-
-# With movement stability (reduce jitter)
 #   python3 main.py --resolution 1080p --movement-threshold 2.0
-#python3 main.py --resolution 4k --movement-threshold 2.0
-
-# Calibration with resolution
-#   python3 main.py --auto-calibrate --resolution 1080p
-#   python3 main.py --live-calibrate --resolution 1080p --target-rate 100
 
 import asyncio
 import websockets
@@ -31,6 +27,37 @@ lock_state = False  # Global lock state
 lock_queue = asyncio.Queue()  # Queue to send updates to aruco_tracker.py
 
 
+async def broadcast_message(message):
+    """Send a message to all connected clients and prune dead connections."""
+    if not connected_clients:
+        return
+
+    clients = tuple(connected_clients)
+    results = await asyncio.gather(
+        *(client.send(message) for client in clients),
+        return_exceptions=True,
+    )
+
+    disconnected_clients = set()
+    payload_too_big = None
+
+    for client, result in zip(clients, results):
+        if isinstance(result, websockets.exceptions.PayloadTooBig):
+            payload_too_big = result
+        elif isinstance(result, (websockets.exceptions.ConnectionClosed, websockets.exceptions.ConnectionClosedOK)):
+            disconnected_clients.add(client)
+            print(f"Client disconnected: {result}")
+        elif isinstance(result, Exception):
+            disconnected_clients.add(client)
+            print(f"Client send failed: {result}")
+
+    for client in disconnected_clients:
+        connected_clients.discard(client)
+
+    if payload_too_big is not None:
+        raise payload_too_big
+
+
 async def track_and_broadcast(resolution='4k', scale_factor=0.7, movement_threshold=1.0):
     # No CPU affinity on macOS - instead use higher task priority if needed
     
@@ -45,7 +72,7 @@ async def track_and_broadcast(resolution='4k', scale_factor=0.7, movement_thresh
                 pass
                 
             tracking_message = json.dumps({
-                "type": "tracking_data", 
+                "type": "tracking_data",
                 "data": output_dict,
                 "auto_lock_info": auto_lock_info
             })
@@ -60,9 +87,7 @@ async def track_and_broadcast(resolution='4k', scale_factor=0.7, movement_thresh
             
         if connected_clients:
             try:
-                await asyncio.gather(
-                    *[client.send(tracking_message) for client in connected_clients]
-                )
+                await broadcast_message(tracking_message)
             except websockets.exceptions.PayloadTooBig:
                 # If message is still too big, send without the frame data
                 print("Warning: Message too large. Removing frame data.")
@@ -70,16 +95,7 @@ async def track_and_broadcast(resolution='4k', scale_factor=0.7, movement_thresh
                     output_dict.pop("frame")
                     print("Removed frame data from message due to size constraints")
                 tracking_message = json.dumps({"type": "tracking_data", "data": output_dict})
-                await asyncio.gather(
-                    *[client.send(tracking_message) for client in connected_clients]
-                )
-            except (websockets.exceptions.ConnectionClosed, websockets.exceptions.ConnectionClosedOK) as e:
-                # Client disconnected - clean up the client list
-                print(f"Client disconnected: {e}")
-                # Remove closed connections
-                connected_clients_copy = set(client for client in connected_clients if not client.closed)
-                connected_clients.clear()
-                connected_clients.update(connected_clients_copy)
+                await broadcast_message(tracking_message)
 
 
 async def handler(websocket):
@@ -111,13 +127,11 @@ async def handler(websocket):
             if data["type"] == "match_dict":
                 match_message = json.dumps({"type": "match_dict", "data": data["data"]})
                 if connected_clients:
-                    await asyncio.gather(
-                        *[client.send(match_message) for client in connected_clients]
-                    )
-    except websockets.exceptions.ConnectionClosedError:
+                    await broadcast_message(match_message)
+    except (websockets.exceptions.ConnectionClosedError, websockets.exceptions.ConnectionClosedOK):
         pass
     finally:
-        connected_clients.remove(websocket)
+        connected_clients.discard(websocket)
 
 
 async def main(resolution='4k', scale_factor=0.7, movement_threshold=1.0):
@@ -159,15 +173,12 @@ async def main(resolution='4k', scale_factor=0.7, movement_threshold=1.0):
         zigbee_process.terminate()
         print("zigbee.py terminated.")
 
-def run_calibration_mode(auto_mode=False, live_mode=False, frames=20, max_combinations=50, scale_factor=0.7, resolution='4k', target_rate=100, max_duration=300):
-    """Run the ArUco marker calibration tool"""
-    print(f"Starting ArUco calibration mode with {resolution} resolution...")
+def run_calibration_mode(auto_mode=False, frames=20, max_combinations=50, scale_factor=0.7, resolution='4k'):
+    """Run the ArUco marker detection parameter calibration"""
+    print(f"Starting ArUco detection calibration with {resolution} resolution...")
     try:
         import aruco_tracker_calibration
-        if live_mode:
-            print(f"Running LIVE ADAPTIVE calibration targeting {target_rate}% detection...")
-            aruco_tracker_calibration.run_live_adaptive_calibration(scale_factor, resolution, target_rate, max_duration)
-        elif auto_mode:
+        if auto_mode:
             print("Running automated calibration process...")
             aruco_tracker_calibration.run_auto_calibration(scale_factor, frames, max_combinations, resolution)
         else:
@@ -177,42 +188,86 @@ def run_calibration_mode(auto_mode=False, live_mode=False, frames=20, max_combin
     except Exception as e:
         print(f"Error in calibration mode: {e}")
 
+
+def run_camera_calibration(resolution='4k', captures=20):
+    """Run camera lens distortion calibration using ChArUco board"""
+    print(f"Starting camera calibration with {resolution} resolution...")
+    try:
+        import calibrate_camera
+        calibrate_camera.interactive_capture(
+            resolution=resolution,
+            use_charuco=True,
+            board_size=(8, 11),        # 8x11 ChArUco board
+            square_size_mm=25.0,       # 25mm squares
+            marker_size_mm=18.0,       # 18mm markers
+            num_captures=captures
+        )
+    except ImportError:
+        print("Error: Could not import calibrate_camera module")
+    except Exception as e:
+        print(f"Error in camera calibration: {e}")
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="ArUco tracking system for Mechatronics")
+    parser = argparse.ArgumentParser(
+        description="ArUco tracking system for Mechatronics",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+─── Calibration Commands ───────────────────────────────────────
+
+  Step 1: Camera lens calibration (run once per camera/resolution)
+    python3 main.py --camera-calibrate --resolution 4k
+
+  Step 2: ArUco detection parameter calibration
+    python3 main.py --auto-calibrate --resolution 1080p
+
+  Step 3: Manual ArUco calibration (interactive)
+    python3 main.py --calibrate --resolution 1080p
+
+─── Run Tracker ────────────────────────────────────────────────
+
+    python3 main.py --resolution 1080p
+    python3 main.py --resolution 1080p --movement-threshold 2.0
+        """
+    )
+
+    # --- Calibration modes ---
+    parser.add_argument("--camera-calibrate", action="store_true",
+                      help="Calibrate camera lens distortion using ChArUco board (run first, once per camera)")
     parser.add_argument("--calibrate", "-c", action="store_true",
-                      help="Run in calibration mode to optimize ArUco detection parameters")
+                      help="Run interactive ArUco detection parameter calibration")
     parser.add_argument("--auto-calibrate", "-a", action="store_true",
-                      help="Run automatic calibration to find optimal parameters without manual intervention")
-    parser.add_argument("--live-calibrate", "-l", action="store_true",
-                      help="Run LIVE adaptive calibration that adjusts parameters until 100% detection is achieved")
-    parser.add_argument("--frames", type=int, default=20,
-                      help="Number of frames to capture for automated calibration (default: 20)")
+                      help="Run automatic ArUco detection parameter calibration")
+
+    # --- Calibration options ---
+    parser.add_argument("--frames", type=int, default=50,
+                      help="Number of frames for auto calibration (default: 50)")
     parser.add_argument("--max-combinations", type=int, default=50,
-                      help="Maximum parameter combinations to test in auto calibration (default: 50)")
-    parser.add_argument("--target-rate", type=int, default=100,
-                      help="Target detection rate percentage for live calibration (default: 100)")
-    parser.add_argument("--max-duration", type=int, default=300,
-                      help="Maximum calibration duration in seconds (default: 300)")
+                      help="Max parameter combinations to test (default: 50)")
+    parser.add_argument("--captures", type=int, default=20,
+                      help="Number of captures for camera calibration (default: 20)")
+
+    # --- Runtime options ---
     parser.add_argument("--scale", type=float, default=0.7,
                       help="Scale factor for processing (default: 0.7)")
     parser.add_argument("--movement-threshold", type=float, default=1.0,
-                      help="Minimum movement in cm to update position (reduces jitter, default: 1.0)")
-    parser.add_argument("--resolution", "-r", choices=['4k', '1080p'], default='4k',
-                      help="Camera resolution: 4k (3840x2160) or 1080p (1920x1080) (default: 4k)")
+                      help="Min movement in cm to update position (default: 1.0)")
+    parser.add_argument("--resolution", "-r", choices=['4k', '1080p'], default='1080p',
+                      help="Camera resolution (default: 1080p)")
     
     args = parser.parse_args()
     
-    if args.calibrate:
-        # Manual calibration mode
-        run_calibration_mode(False, False, args.frames, args.max_combinations, args.scale, args.resolution, args.target_rate, args.max_duration)
+    if args.camera_calibrate:
+        # Step 1: Camera lens distortion calibration
+        run_camera_calibration(args.resolution, args.captures)
+    elif args.calibrate:
+        # Step 2a: Interactive ArUco parameter calibration
+        run_calibration_mode(False, args.frames, args.max_combinations, args.scale, args.resolution)
     elif args.auto_calibrate:
-        # Automatic calibration mode
-        run_calibration_mode(True, False, args.frames, args.max_combinations, args.scale, args.resolution, args.target_rate, args.max_duration)
-    elif args.live_calibrate:
-        # Live adaptive calibration mode
-        run_calibration_mode(False, True, args.frames, args.max_combinations, args.scale, args.resolution, args.target_rate, args.max_duration)
+        # Step 2b: Automatic ArUco parameter calibration
+        run_calibration_mode(True, args.frames, args.max_combinations, args.scale, args.resolution)
     else:
-        # For Mac M1, optimize event loop policy if available
+        # Normal tracking mode
         if platform.system() == 'Darwin' and "arm" in platform.machine().lower():
             try:
                 import uvloop
@@ -222,4 +277,3 @@ if __name__ == "__main__":
                 print("Note: Install uvloop with 'pip install uvloop' for better performance")
         
         asyncio.run(main(args.resolution, args.scale, args.movement_threshold))
-
